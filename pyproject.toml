@@ -26,8 +26,8 @@ toml = "0.10.2"
 pyinstaller = "6.12.0"
 
 [tool.build]
-build-dir = "$project$\\build"
-entry = "$project$\\Main.py"
+build-dir = "$project$/build"
+entry = "$project$/Main.py"
 log-level = "WARN"
 
 [build-system]

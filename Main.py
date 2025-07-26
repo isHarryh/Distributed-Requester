@@ -103,11 +103,18 @@ async def run_client_mode(config: Config):
         await asyncio.sleep(30)
 
 
-async def run_server_mode(config: Config):
+async def run_server_mode(config_path: str):
     """Run server mode"""
 
     print("Running in server mode")
     print("=" * 50)
+
+    # Load config to check server configuration
+    try:
+        config = load_config(config_path)
+    except ConfigError as e:
+        print(f"Configuration error: {e}")
+        sys.exit(1)
 
     if not config.server:
         print("Error: Server configuration is required to run server mode")
@@ -115,7 +122,7 @@ async def run_server_mode(config: Config):
 
     try:
         print(f"Starting server on port {config.server.port}")
-        server = Server(config)
+        server = Server(config_path)
         await server.serve()
 
     except KeyboardInterrupt:
@@ -148,7 +155,7 @@ async def main_async():
 
     # Determine run mode
     if args.server:
-        await run_server_mode(config)
+        await run_server_mode(args.config_file)
     elif args.client:
         await run_client_mode(config)
     else:

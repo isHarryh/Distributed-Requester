@@ -7,10 +7,10 @@ import time
 from collections import defaultdict, deque
 from threading import Lock
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from src.Config import Config, ReportConfig
+from src.Config import ReportConfig, load_config
 
 
 # Request/Response models
@@ -39,16 +39,20 @@ class ClientReport:
 class Server:
     """FastAPI-based distributed stress testing server."""
 
-    def __init__(self, config: Config):
-        if not config.server:
+    def __init__(self, config_path: str):
+        # Load initial config to validate and setup server
+        self.config_path = config_path
+        self.config = load_config(config_path)
+
+        if not self.config.server:
             raise ValueError("Server configuration is required when running in server mode")
 
-        self.config = config
-        self.server_config = config.server
-        self.app = FastAPI(title="Distributed Requester Server", version=config.version)
+        self.server_config = self.config.server
+        self.app = FastAPI(title="Distributed Requester Server", version=self.config.version)
 
-        # Stats tracking
         self._stats_lock = Lock()
+        self._config_lock = Lock()
+
         self.total_stats: Dict[str, int] = defaultdict(int)
         self.total_bytes_down = 0
         self.client_reports: deque = deque()
@@ -65,8 +69,17 @@ class Server:
         @self.app.get("/get_config", response_model=StandardResponse)
         async def get_config():
             """Get configuration for client."""
-            # Random task selection
-            selected_task = random.choice(self.config.tasks) if self.config.tasks else None
+            # Read fresh config from file with lock protection
+            with self._config_lock:
+                try:
+                    fresh_config = load_config(self.config_path)
+                except Exception as e:
+                    # If reading fails, return 502 error
+                    print(f"Error: Failed to read fresh config: {e}")
+                    raise HTTPException(status_code=502, detail=f"Failed to read config: {e}")
+
+            # Random task selection from fresh config
+            selected_task = random.choice(fresh_config.tasks) if fresh_config.tasks else None
 
             # Build response config (exclude server and client)
             response_config = {

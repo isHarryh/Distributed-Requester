@@ -1,0 +1,35 @@
+[project]
+name = "Distributed-Requester"
+version = "0.1.0"
+description = "Distributed stress testing tool for web servers"
+authors = [
+    {name = "Harry Huang", email = "harryhuang2652@qq.com"}
+]
+license = "MIT"
+readme = "README.md"
+requires-python = ">=3.9,<3.13"
+dependencies = [
+    "httpx (~=0.28.0)",
+    "fastapi[standard] (~=0.116.0)"
+]
+
+[tool.poetry]
+package-mode = false
+
+[[tool.poetry.source]]
+name = "PyPI-Tsinghua"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+priority = "primary"
+
+[tool.poetry.group.dev.dependencies]
+toml = "0.10.2"
+pyinstaller = "6.12.0"
+
+[tool.build]
+build-dir = "$project$\\build"
+entry = "$project$\\Main.py"
+log-level = "WARN"
+
+[build-system]
+requires = ["poetry-core>=2.0"]
+build-backend = "poetry.core.masonry.api"

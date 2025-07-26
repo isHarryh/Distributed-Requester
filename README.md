@@ -5,24 +5,24 @@ Distributed stress testing tool for web servers
 
 ## Introduction
 
-This tool is designed for distributed stress testing of web servers, allowing you to run tests across multiple clients and one server. It supports both offline mode with predefined tasks and distributed mode where clients will fetch tasks from server in advance.
+This tool is designed for distributed stress testing of web servers. It supports both offline mode with predefined tasks and distributed mode where clients will fetch tasks from server in advance.
 
 ## Get Started
 
-### Requirements
+### Installation
 
-- Python 3.12
-- Install dependencies (using poetry or pip)
+1. Python >=3.9 is required.
+2. Use poetry (recommended) or pip to install dependencies.
 
 ### Usage
 
-```txt
-usage: main.py [-h] [-s] [-c] config_file
+To use the tool in command line:
 
-Distributed Requester
+```txt
+usage: main.py [-h] [-s] [-c] [config_file]
 
 positional arguments:
-  config_file   Configuration file path
+  config_file   Configuration file path (default: config.json)
 
 options:
   -h, --help    show this help message and exit
@@ -30,7 +30,23 @@ options:
   -c, --client  Run in client mode
 ```
 
-If no switch provided, it will run in offline mode with local tasks that defined in the config file.
+If no argument is provided, it will run in `--client` mode with `config.json` by default.
+
+If config file is provided but no option is provided, it will run in offline mode.
+
+### Build
+
+To build an executable file:
+
+Install poetry (a package manager), then:
+
+```bash
+poetry env use python
+poetry install
+poetry run python Build.py
+```
+
+> Note: Change the word "python" to the actual python interpreter you installed (like "python3" or "python3.12") if necessary.
 
 ## Licensing
 

@@ -238,18 +238,32 @@ class Client:
             self.report_interval = 0
             self.server_url = None
 
+        # Track previous stats for incremental reporting
+        self.last_reported_status_counts = {status: 0 for status in ResponseStatus}
+        self.last_reported_bytes_down = 0
+
     async def _report_to_server(self):
-        """Report current statistics to server"""
+        """Report incremental statistics to server"""
         if not self.server_url or self.report_interval <= 0:
             return
 
         current_time = time.time()
         span = current_time - self.last_report_time
 
-        # Prepare stats data
-        stats_data = {status.value: count for status, count in self.stats.status_counts.items()}
+        # Calculate incremental stats data
+        incremental_stats = {}
+        for status, current_count in self.stats.status_counts.items():
+            last_count = self.last_reported_status_counts.get(status, 0)
+            incremental_count = current_count - last_count
+            if incremental_count > 0:
+                incremental_stats[status.value] = incremental_count
+            self.last_reported_status_counts[status] = current_count
 
-        report_data = {"span": span, "stats": stats_data, "bytes_down": self.stats.bytes_down}
+        # Calculate incremental bytes_down
+        incremental_bytes = self.stats.bytes_down - self.last_reported_bytes_down
+        self.last_reported_bytes_down = self.stats.bytes_down
+
+        report_data = {"span": span, "stats": incremental_stats, "bytes_down": incremental_bytes}
 
         try:
             async with httpx.AsyncClient() as client:

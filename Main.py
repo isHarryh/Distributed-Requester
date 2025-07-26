@@ -134,12 +134,19 @@ async def run_server_mode(config_path: str):
 
 async def main_async():
     """Async main function"""
+
     parser = argparse.ArgumentParser(description="Distributed Requester")
-    parser.add_argument("config_file", help="Configuration file path")
+    parser.add_argument(
+        "config_file", nargs="?", default="config.json", help="Configuration file path (default: config.json)"
+    )
     parser.add_argument("-s", "--server", action="store_true", help="Run in server mode")
     parser.add_argument("-c", "--client", action="store_true", help="Run in client mode")
 
-    args = parser.parse_args()
+    # If no arguments, default to client mode with config.json
+    if len(sys.argv) == 1:
+        args = parser.parse_args(["config.json", "-c"])
+    else:
+        args = parser.parse_args()
 
     # Validate argument combinations
     if args.server and args.client:

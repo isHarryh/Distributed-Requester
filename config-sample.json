@@ -1,0 +1,55 @@
+// This is a sample configuration file with comments.
+// But actual configuration files should not have these comments.
+
+{
+    "version": "0.1", // required
+    "tasks": [ // optional
+        {
+            "name": "Example Task", // required
+            "requests": [ // required, must not be empty
+                {
+                    "url": "https:\/\/httpbin.org/get", // required
+                    "method": "GET", // optional, default to "GET"
+                    "headers": { // optional
+                        "Content-Type": "application/json",
+                        "User-Agent": "httpx/0.28.0"
+                    }
+                },
+                {
+                    "url": "https:\/\/httpbin.org/post",
+                    "method": "POST",
+                    "data": "value1=data1&value2=data2" // can also be object, for POST/PUT/PATCH methods only
+                }
+            ],
+            "policy": { // optional (children are also optional)
+                "reuse_connections": true, // default to true, if false, a new connection will be created for each request
+                "order": "random", // default to "random", currently only "random" is supported
+                "schedule": {
+                    "start": "2025-01-01T08:00+08:00", //  or number (offset from now), omitted/null/0 means start immediately
+                    "end": "2025-01-01T09:00+08:00" // or number (offset from now), omitted/null/0 means no end
+                },
+                "limits": {
+                    "rps": 1234, // omitted/null means no limit
+                    "coroutines": 64 // omitted/null default to 64
+                },
+                "timeouts": {
+                    "connect": 5.0, // default to 5.0
+                    "read": 10.0, // default to 10.0
+                    "write": 10.0 // default to 10.0
+                }
+            }
+        }
+    ],
+    "server": { // optional (required if running as server)
+        "port": 5000, // required
+        "distributing": { // required
+            "task_order": "random" // required, currently only "random" is supported, default to "random"
+        }
+    },
+    "client": { // optional (required if running as distributed client)
+        "server_url": "http:\/\/127.0.0.1:5000", // required
+        "report": { // optional
+            "live_report_interval": 30 // optional, default to 30, omitted/null/0 means no reporting
+        }
+    }
+}

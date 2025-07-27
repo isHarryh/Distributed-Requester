@@ -2,7 +2,7 @@
 // But actual configuration files should not have these comments.
 
 {
-    "version": "0.1", // required
+    "version": "0.2", // required
     "tasks": [ // optional
         {
             "name": "Example Task", // required

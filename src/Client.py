@@ -10,49 +10,14 @@ import httpx
 
 from src.Config import TaskConfig, Config
 from src.Request import ResponseStatus, RequestWorker, RateLimiter, RequestState
-
-
-class PartialStats:
-    """Per-second statistics."""
-
-    def __init__(self):
-        # Each status maps to a list of response times
-        self.stats = {status: [] for status in ResponseStatus}
-        self.bytes_down = 0
-
-    def add_result(self, status: ResponseStatus, response_time: float, bytes_count: int):
-        self.stats[status].append(response_time)
-        self.bytes_down += bytes_count
-
-    def get_total_count(self) -> int:
-        return sum(len(times) for times in self.stats.values())
-
-    def get_success_count(self) -> int:
-        return len(self.stats[ResponseStatus.SUCCESS])
-
-    def get_failure_count(self) -> int:
-        return self.get_total_count() - self.get_success_count()
-
-    def get_sorted_stats(self) -> list:
-        result = []
-        for status, times in self.stats.items():
-            count = len(times)
-            if count > 0:
-                total = self.get_total_count()
-                percentage = (count / total * 100) if total > 0 else 0
-                avg_latency = sum(times) / count * 1000 if count > 0 else 0.0
-                result.append((status.value, count, percentage, avg_latency))
-
-        # Sort by count (descending)
-        result.sort(key=lambda x: x[1], reverse=True)
-        return result
+from src.utils.StringFormatter import format_bandwidth, format_delta_time
 
 
 class OverallStats:
-    """Overall statistics."""
 
-    def __init__(self, max_seconds: int = 60):
+    def __init__(self, partial_span: int = 60):
         self._lock = Lock()
+
         # Overall statistics
         self.total_requests = 0
         self.success_requests = 0
@@ -65,8 +30,9 @@ class OverallStats:
         self.min_response_time = float("inf")
         self.max_response_time = 0
 
-        # Per-second statistics (deque of (second, SecondStats))
-        self.second_stats = deque(maxlen=max_seconds)
+        # Per-second statistics: deque of (timestamp, {status: [response_times], bytes_down: int})
+        self.partial_span = partial_span
+        self.second_stats = deque(maxlen=partial_span)
 
         # Status type statistics
         self.status_counts = {status: 0 for status in ResponseStatus}
@@ -121,25 +87,14 @@ class OverallStats:
             # Update per-second statistics
             now_sec = int(time.time())
             if not self.second_stats or self.second_stats[-1][0] != now_sec:
-                self.second_stats.append((now_sec, PartialStats()))
-            self.second_stats[-1][1].add_result(status, response_time, bytes_down)
+                # Create new second entry: (timestamp, {status: [response_times], bytes_down: int})
+                new_second_data = {"status_times": {status: [] for status in ResponseStatus}, "bytes_down": 0}
+                self.second_stats.append((now_sec, new_second_data))
 
-    def get_recent_stats(self, span: int = 1) -> PartialStats:
-        with self._lock:
-            if not self.second_stats:
-                return PartialStats()
-
-            current_time = int(time.time())
-            aggregated_stats = PartialStats()
-
-            # Aggregate stats from the last 'span' seconds
-            for timestamp, stats in self.second_stats:
-                if current_time - timestamp < span:
-                    for status, times in stats.stats.items():
-                        aggregated_stats.stats[status].extend(times)
-                    aggregated_stats.bytes_down += stats.bytes_down
-
-            return aggregated_stats
+            # Add data to current second
+            current_second = self.second_stats[-1][1]
+            current_second["status_times"][status].append(response_time)
+            current_second["bytes_down"] += bytes_down
 
     def get_avg_response_ms(self) -> float:
         with self._lock:
@@ -160,6 +115,141 @@ class OverallStats:
             if elapsed_time <= 0:
                 return 0.0
             return self.bytes_down * 8 / elapsed_time / 1024 / 1024
+
+    def get_partial_total_count(self, span: Optional[int] = None) -> int:
+        if span is None:
+            span = self.partial_span
+        with self._lock:
+            if not self.second_stats:
+                return 0
+
+            current_time = int(time.time())
+            total_count = 0
+
+            for timestamp, second_data in self.second_stats:
+                if current_time - timestamp < span:
+                    for times_list in second_data["status_times"].values():
+                        total_count += len(times_list)
+
+            return total_count
+
+    def get_partial_success_count(self, span: Optional[int] = None) -> int:
+        if span is None:
+            span = self.partial_span
+        with self._lock:
+            if not self.second_stats:
+                return 0
+
+            current_time = int(time.time())
+            success_count = 0
+
+            for timestamp, second_data in self.second_stats:
+                if current_time - timestamp < span:
+                    success_count += len(second_data["status_times"][ResponseStatus.SUCCESS])
+
+            return success_count
+
+    def get_partial_failure_count(self, span: Optional[int] = None) -> int:
+        if span is None:
+            span = self.partial_span
+        return self.get_partial_total_count(span) - self.get_partial_success_count(span)
+
+    def get_partial_bytes_down(self, span: Optional[int] = None) -> int:
+        if span is None:
+            span = self.partial_span
+        with self._lock:
+            if not self.second_stats:
+                return 0
+
+            current_time = int(time.time())
+            total_bytes = 0
+
+            for timestamp, second_data in self.second_stats:
+                if current_time - timestamp < span:
+                    total_bytes += second_data["bytes_down"]
+
+            return total_bytes
+
+    def get_partial_rps(self, span: Optional[int] = None) -> float:
+        if span is None:
+            span = self.partial_span
+        total_count = self.get_partial_total_count(span)
+        if span <= 0:
+            return 0.0
+        return total_count / span
+
+    def get_partial_bandwidth_mbps(self, span: Optional[int] = None) -> float:
+        if span is None:
+            span = self.partial_span
+        total_bytes = self.get_partial_bytes_down(span)
+        if span <= 0:
+            return 0.0
+        return total_bytes * 8 / span / 1024 / 1024
+
+    def get_partial_sorted_stats(self, span: Optional[int] = None) -> list:
+        if span is None:
+            span = self.partial_span
+        with self._lock:
+            if not self.second_stats:
+                return []
+
+            current_time = int(time.time())
+            status_aggregated = {status: [] for status in ResponseStatus}
+
+            # Aggregate data from the specified span
+            for timestamp, second_data in self.second_stats:
+                if current_time - timestamp < span:
+                    for status, times_list in second_data["status_times"].items():
+                        status_aggregated[status].extend(times_list)
+
+            # Build result list
+            result = []
+            total_count = sum(len(times) for times in status_aggregated.values())
+
+            for status, times_list in status_aggregated.items():
+                count = len(times_list)
+                if count > 0:
+                    percentage = (count / total_count * 100) if total_count > 0 else 0
+                    avg_latency = sum(times_list) / count * 1000 if count > 0 else 0.0
+                    result.append((status.value, count, percentage, avg_latency))
+
+            # Sort by count (descending)
+            result.sort(key=lambda x: x[1], reverse=True)
+            return result
+
+    def print_live_stats(self):
+        if self.total_requests == 0:
+            return
+
+        content = "\033[2J\033[H"
+
+        content += "| %-15s | %6s | %7s | %7s |\n" % ("Period", "Total", "Success", "Failure")
+        content += "+" + "-" * 17 + "+" + "-" * 8 + "+" + "-" * 9 + "+" + "-" * 9 + "+\n"
+        content += "| %-15s | %6d | %7d | %7d |\n" % (
+            "Last %s" % format_delta_time(self.partial_span),
+            self.get_partial_total_count(),
+            self.get_partial_success_count(),
+            self.get_partial_failure_count(),
+        )
+        if time.time() - self.start_time > self.partial_span:
+            content += "| %-15s | %6d | %7d | %7d |\n" % (
+                "All %s" % format_delta_time(time.time() - self.start_time),
+                self.total_requests,
+                self.success_requests,
+                self.failure_requests,
+            )
+        content += "\n"
+
+        # Print detailed status breakdown - only header border
+        sorted_stats = self.get_partial_sorted_stats()
+        if sorted_stats:
+            content += "| %-15s | %5s | %7s | %8s |\n" % ("Status", "Count", "%", "Latency")
+            content += "+" + "-" * 17 + "+" + "-" * 7 + "+" + "-" * 8 + "+" + "-" * 11 + "+\n"
+
+            for status_name, count, percentage, latency in sorted_stats:
+                content += "| %-15s | %5d | %6.1f%% | %6.0fms |\n" % (status_name, count, percentage, latency)
+
+        print(content, end="", flush=True)
 
     def print_final_stats(self):
         elapsed_time = time.time() - self.start_time
@@ -192,41 +282,13 @@ class OverallStats:
                 percentage = count / self.total_requests * 100
                 print(f"  {status.value}: {count} ({percentage:.1f}%)")
 
-    def print_live_stats(self, span: int = 30):
-        data = self.get_recent_stats(span)
-
-        total_count = data.get_total_count()
-        if total_count == 0:
-            return  # No data to display
-
-        success_count = data.get_success_count()
-        failure_count = data.get_failure_count()
-
-        content = "\033[2J\033[H" + f"{'Request in last ' + str(span) + ' seconds':^30}\n\n"
-
-        # Print main summary table - only header border
-        content += f"| Total | Success | Failure |\n"
-        content += "+" + "-" * 7 + "+" + "-" * 9 + "+" + "-" * 9 + "+\n"
-        content += f"| {total_count:^5} | {success_count:^7} | {failure_count:^7} |\n\n"
-
-        # Print detailed status breakdown - only header border
-        sorted_stats = data.get_sorted_stats()
-        if sorted_stats:
-            content += f"| Status          | Count | %      | Latency |\n"
-            content += "+" + "-" * 17 + "+" + "-" * 7 + "+" + "-" * 8 + "+" + "-" * 9 + "+\n"
-
-            for status_name, count, percentage, latency in sorted_stats:
-                content += f"| {status_name:<15} | {count:^5} | {percentage:>5.1f}% | {latency:>5.0f}ms |\n"
-
-        print(content, end="", flush=True)
-
 
 class Client:
     """Main stress test client."""
 
-    def __init__(self, task_config: TaskConfig, server_config: Optional[Config] = None):
+    def __init__(self, task_config: TaskConfig, server_config: Optional[Config] = None, partial_span: int = 60):
         self.task_config = task_config
-        self.stats = OverallStats()
+        self.stats = OverallStats(partial_span=partial_span)
         self.server_config = server_config
         self.last_report_time = time.time()
 

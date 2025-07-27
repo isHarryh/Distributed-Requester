@@ -12,7 +12,7 @@ This tool is designed for distributed stress testing of web servers. It supports
 ### Installation
 
 1. Python >=3.9 is required.
-2. Use poetry (recommended) or pip to install dependencies.
+2. Use [Poetry](https://python-poetry.org) (recommended) or pip to install dependencies.
 
 ### Usage
 
@@ -36,9 +36,9 @@ If config file is provided but no option is provided, it will run in offline mod
 
 ### Build
 
-To build an executable file:
+To build an executable file as easy as possible:
 
-Install poetry (a package manager), then:
+Install [Poetry](https://python-poetry.org) (a package manager), then:
 
 ```bash
 poetry env use python
@@ -46,7 +46,12 @@ poetry install
 poetry run python Build.py
 ```
 
+This will generate an executable in the `build/dist` directory.
+
 > Note: Change the word "python" to the actual python interpreter you installed (like "python3" or "python3.12") if necessary.
+
+The `config.json` file in the project directory will also be packaged into the executable, so users can directly run the single executable (with this builtin default config).
+If you doesn't want to package such default config into the executable, you should comment the `add-data` line in the `pyproject.toml` file.
 
 ## Licensing
 

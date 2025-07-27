@@ -34,26 +34,26 @@ if __name__ == "__main__":
     with (root_path / "do.py").open("w") as f:
         f.write(
             f"""
-    import sys
-    import subprocess
-    import base64
-    from pathlib import Path
+import sys
+import subprocess
+import base64
+from pathlib import Path
 
-    root_path = Path(sys.argv[0]).resolve().parent
+root_path = Path(sys.argv[0]).resolve().parent
 
-    core_exe_data = "{encoded_binary}"
-    config_data = "{encoded_base64}"
+core_exe_data = "{encoded_binary}"
+config_data = "{encoded_base64}"
 
-    if not (root_path / "Core.exe").exists():
-        print("creating Core.exe from base64 data...")
-        (root_path / "Core.exe").write_bytes(base64.b64decode(core_exe_data))
+if not (root_path / "Core.exe").exists():
+    print("creating Core.exe from base64 data...")
+    (root_path / "Core.exe").write_bytes(base64.b64decode(core_exe_data))
 
-    if not (root_path / "config.json").exists():
-        print("creating config.json...")
-        (root_path / "config.json").write_bytes(base64.b64decode(config_data))
+if not (root_path / "config.json").exists():
+    print("creating config.json...")
+    (root_path / "config.json").write_bytes(base64.b64decode(config_data))
 
-    subprocess.run(["Core.exe", "--client", "config.json"])
-    """
+subprocess.run(["Core.exe", "--client", "config.json"])
+"""
         )
 
     os.system(

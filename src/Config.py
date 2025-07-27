@@ -5,8 +5,8 @@ from datetime import datetime, timezone, timedelta
 from pydantic import BaseModel, Field, field_validator
 
 
-VERSION = "0.1"
-COMPATIBLE_VERSIONS = ["0.1"]
+VERSION = "0.2"
+COMPATIBLE_VERSIONS = ["0.1", "0.2"]
 
 
 class ConfigError(Exception):
@@ -35,7 +35,7 @@ class ScheduleConfig(BaseModel):
 class LimitsConfig(BaseModel):
     """Limits configuration"""
 
-    rps: Optional[int] = None
+    rps: Optional[float] = None
     coroutines: int = 64
 
 

@@ -33,10 +33,10 @@ class RequestState(StrEnum):
 class RateLimiter:
     """Rate limiter to control requests per second."""
 
-    def __init__(self, max_rps: int):
-        self._interval = 1.0 / max(1, max_rps)
+    def __init__(self, max_rps: float):
+        self._interval = 1.0 / max(1.0, max_rps)
         self._lock = asyncio.Lock()
-        self.last_request_time = 0
+        self.last_request_time = 0.0
 
     async def acquire(self):
         async with self._lock:

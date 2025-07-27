@@ -383,9 +383,7 @@ class Client:
         rate_limiter: Optional[RateLimiter],
         end_time: Optional[datetime],
     ):
-        limits_config = httpx.Limits(
-            max_keepalive_connections=concurrent_connections,  # Keep all connections alive
-        )
+        limits_config = httpx.Limits(max_keepalive_connections=concurrent_connections)
 
         async with httpx.AsyncClient(
             limits=limits_config, timeout=timeout_config, follow_redirects=True
@@ -399,19 +397,16 @@ class Client:
         rate_limiter: Optional[RateLimiter],
         end_time: Optional[datetime],
     ):
+        limits_config = httpx.Limits(max_keepalive_connections=1)
+
         clients = []
         try:
-            for _ in range(concurrent_connections):
-                client = httpx.AsyncClient(
-                    timeout=timeout_config,
-                    follow_redirects=True,
-                    limits=httpx.Limits(max_keepalive_connections=1),
-                )
-                clients.append(client)
-
+            clients = [
+                httpx.AsyncClient(limits=limits_config, timeout=timeout_config, follow_redirects=True)
+                for _ in range(concurrent_connections)
+            ]
             await self._run_client_loop(clients, rate_limiter, end_time)
         finally:
-            # Ensure all independent clients are closed
             for client in clients:
                 await client.aclose()
 

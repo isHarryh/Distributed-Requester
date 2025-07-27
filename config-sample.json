@@ -29,7 +29,7 @@
                     "end": "2025-01-01T09:00+08:00" // or number (offset from now), omitted/null/0 means no end
                 },
                 "limits": {
-                    "rps": 1234, // omitted/null means no limit
+                    "rps": 7.5, // omitted/null means no limit
                     "coroutines": 64 // omitted/null default to 64
                 },
                 "timeouts": {

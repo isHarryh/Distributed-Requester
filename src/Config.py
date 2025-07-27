@@ -188,8 +188,22 @@ def parse_datetime(value: Union[str, int, float]) -> datetime:
 
 def load_config(config_path: str) -> Config:
     """Load configuration file and return Pydantic config object"""
+    import os
+    import sys
+
     try:
-        with open(config_path, "r", encoding="utf-8") as f:
+        if os.path.exists(config_path):
+            path = config_path
+        elif getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+            # Try to get config file from frozen package
+            base_path = getattr(sys, "_MEIPASS")
+            path = os.path.join(base_path, config_path)
+            if not os.path.exists(path):
+                raise FileNotFoundError(config_path)
+        else:
+            raise FileNotFoundError(config_path)
+
+        with open(path, "r", encoding="utf-8") as f:
             content = f.read()
             # Remove JSONC comments (simple implementation)
             lines = content.split("\n")

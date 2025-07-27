@@ -28,6 +28,7 @@ pyinstaller = "6.12.0"
 [tool.build]
 build-dir = "$project$/build"
 entry = "$project$/Main.py"
+add-data = "$project$/config.json:."
 log-level = "WARN"
 
 [build-system]

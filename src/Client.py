@@ -11,6 +11,7 @@ from src.Config import TaskConfig, Config
 from src.Request import ResponseStatus, RequestWorker, RateLimiter
 from src.utils.StringFormatter import format_delta_time
 from src.utils.CustomTransport import AsyncCustomHost, NameSolver
+from src.app_logging import Logger, LogLevel, TrafficMonitor
 
 
 class OverallStats:
@@ -303,6 +304,19 @@ class Client:
         # Track previous stats for incremental reporting
         self.last_reported_status_counts = {status: 0 for status in ResponseStatus}
         self.last_reported_bytes_down = 0
+        
+        # 初始化日志系统
+        self.logger = Logger(f"client_{task_config.name}", log_level=LogLevel.INFO)
+        self.logger.info("Client initialized", task_name=task_config.name, 
+                        concurrent_connections=task_config.policy.limits.coroutines,
+                        requests_count=len(task_config.requests))
+        
+        # 初始化流量监控器
+        self.traffic_monitor = TrafficMonitor()
+        
+        # 流量统计
+        self._app_bytes_sent = 0
+        self._app_bytes_received = 0
 
     async def _report_to_server(self):
         """Report incremental statistics to server"""
@@ -469,6 +483,55 @@ class Client:
     def _stats_callback(self, response, start_time, status, response_time, bytes_count):
         """Callback function for workers to report statistics"""
         self.stats.add_result(response, start_time)
+        
+        # 记录请求日志和流量统计
+        if isinstance(response, httpx.Response):
+            request = response.request
+            
+            # 计算请求字节数（包括headers和body）
+            request_headers_size = sum(len(k) + len(v) + 4 for k, v in request.headers.items())  # +4 for ": " and "\r\n"
+            request_body_size = len(request.content) if request.content else 0
+            bytes_sent = request_headers_size + request_body_size
+            
+            # 计算响应字节数（包括headers和body）
+            response_headers_size = sum(len(k) + len(v) + 4 for k, v in response.headers.items())
+            response_body_size = len(response.content) if response.content else 0
+            bytes_received = response_headers_size + response_body_size
+            
+            # 更新流量统计
+            self._app_bytes_sent += bytes_sent
+            self._app_bytes_received += bytes_received
+            
+            # 更新流量监控器
+            self.traffic_monitor.add_app_traffic(bytes_sent, bytes_received)
+            
+            # 记录请求日志
+            self.logger.log_request(
+                method=request.method,
+                url=str(request.url),
+                status_code=response.status_code,
+                response_time=response_time,
+                error=None
+            )
+            
+            # 记录详细的流量信息到日志
+            self.logger.debug("Request traffic details", 
+                            method=request.method,
+                            url=str(request.url),
+                            bytes_sent=bytes_sent,
+                            bytes_received=bytes_received,
+                            request_body_size=request_body_size,
+                            response_body_size=response_body_size)
+        else:
+            # 记录错误请求
+            error_msg = str(response) if response else "Unknown error"
+            self.logger.log_request(
+                method="UNKNOWN",
+                url="UNKNOWN", 
+                status_code=None,
+                response_time=response_time,
+                error=error_msg
+            )
 
     async def run(self):
         # Wait for start time
@@ -476,6 +539,14 @@ class Client:
 
         # Print test information
         self._print_test_info()
+        
+        # 记录测试开始日志
+        self.logger.info("Task started",
+                        start_time=datetime.now().isoformat(),
+                        end_time=self.task_config.policy.schedule.get_end_time().isoformat() if self.task_config.policy.schedule.get_end_time() else None)
+        
+        # 开始流量监控
+        self.traffic_monitor.start_monitoring()
 
         # Extract configuration
         limits = self.task_config.policy.limits
@@ -504,8 +575,38 @@ class Client:
 
         except Exception as e:
             if "Force exit" not in str(e):
+                self.logger.error("Task execution failed", error=str(e))
                 print(f"\nError during testing: {e}")
                 return
+        finally:
+            # 停止流量监控并获取汇总信息
+            try:
+                traffic_summary = self.traffic_monitor.stop_monitoring()
+                
+                # 记录流量统计日志
+                self.logger.log_traffic(
+                    bytes_sent=traffic_summary.total_bytes_sent,
+                    bytes_received=traffic_summary.total_bytes_received,
+                    duration=traffic_summary.duration_seconds
+                )
+                
+                # 记录最终统计信息
+                final_stats = {
+                    "total_requests": self.stats.total_requests,
+                    "success_requests": self.stats.success_requests,
+                    "failure_requests": self.stats.failure_requests,
+                    "success_rate": (self.stats.success_requests / self.stats.total_requests * 100) if self.stats.total_requests > 0 else 0,
+                    "avg_response_time_ms": self.stats.get_avg_response_ms(),
+                    "avg_rps": self.stats.get_rps(),
+                    "total_bytes_down": self.stats.bytes_down,
+                    "avg_bandwidth_mbps": self.stats.get_bandwidth_mbps()
+                }
+                
+                self.logger.log_stats("final_results", final_stats)
+                self.logger.info(f"流量统计：上传: {self.traffic_monitor.format_bytes(self._app_bytes_sent)}；下载: {self.traffic_monitor.format_bytes(self._app_bytes_received)}；总计: {self.traffic_monitor.format_bytes(self._app_bytes_sent + self._app_bytes_received)}")
+                
+            except Exception as e:
+                self.logger.error("Failed to stop traffic monitoring", error=str(e))
 
         # Print final statistics
         self.stats.print_final_stats()

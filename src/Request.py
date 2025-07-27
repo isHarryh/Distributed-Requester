@@ -131,17 +131,20 @@ class RequestWorker:
         request_config = self._select_request()
         post_data = self._prepare_request_data(request_config)
 
+        # Merge default headers with request-specific headers
+        merged_headers = {}
+        merged_headers.update(self.task_config.prefabs.default_headers)
+        merged_headers.update(request_config.headers)
+
         start_time = time.time()
 
         try:
             self.state = RequestState.WORKING
 
             if post_data is not None:
-                response = await self.session.post(
-                    request_config.url, content=post_data, headers=request_config.headers
-                )
+                response = await self.session.post(request_config.url, content=post_data, headers=merged_headers)
             else:
-                response = await self.session.get(request_config.url, headers=request_config.headers)
+                response = await self.session.get(request_config.url, headers=merged_headers)
 
             # Calculate bytes transferred
             bytes_count = self.estimate_response_size(response) if isinstance(response, httpx.Response) else 0

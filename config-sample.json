@@ -37,6 +37,16 @@
                     "read": 10.0, // default to 10.0
                     "write": 10.0 // default to 10.0
                 }
+            },
+            "prefabs": { // optional (children are also optional)
+                "override_hosts": { // overrides the system DNS resolver
+                    "example.com": "1.2.3.4",
+                    "www.example.com": "1.2.3.4"
+                },
+                "default_headers": { // default headers for all requests in this task
+                    "Accept-Encoding": "gzip, deflate, br, zstd",
+                    "Accept-Language": "en"
+                }
             }
         }
     ],

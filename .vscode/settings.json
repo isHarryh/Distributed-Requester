@@ -1,5 +1,8 @@
 {
     "black-formatter.args": [ "-l 120" ],
     "editor.formatOnSave": true,
+    "files.associations": {
+        "config-sample.json": "jsonc"
+    },
     "python.analysis.typeCheckingMode": "basic"
 }

@@ -64,6 +64,13 @@ class PolicyConfig(BaseModel):
         return v
 
 
+class PrefabsConfig(BaseModel):
+    """Prefabs configuration for task-level settings"""
+
+    override_hosts: Dict[str, str] = Field(default_factory=dict)
+    default_headers: Dict[str, str] = Field(default_factory=dict)
+
+
 class RequestConfig(BaseModel):
     """Request configuration"""
 
@@ -91,6 +98,7 @@ class TaskConfig(BaseModel):
     name: str
     requests: List[RequestConfig]
     policy: PolicyConfig = Field(default_factory=PolicyConfig)
+    prefabs: PrefabsConfig = Field(default_factory=PrefabsConfig)
 
     @field_validator("requests")
     @classmethod

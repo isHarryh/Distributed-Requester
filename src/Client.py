@@ -1,4 +1,3 @@
-from enum import StrEnum
 from typing import Optional, Union, List
 import asyncio
 import time
@@ -9,8 +8,9 @@ from threading import Lock
 import httpx
 
 from src.Config import TaskConfig, Config
-from src.Request import ResponseStatus, RequestWorker, RateLimiter, RequestState
-from src.utils.StringFormatter import format_bandwidth, format_delta_time
+from src.Request import ResponseStatus, RequestWorker, RateLimiter
+from src.utils.StringFormatter import format_delta_time
+from src.utils.CustomTransport import AsyncCustomHost, NameSolver
 
 
 class OverallStats:
@@ -376,6 +376,18 @@ class Client:
         print(f"End Time: {end_time.isoformat() if end_time else 'No end time set'}")
         print("-" * 80)
 
+    def _create_httpx_client(self, limits_config: httpx.Limits, timeout_config: httpx.Timeout) -> httpx.AsyncClient:
+        """Create httpx.AsyncClient with custom transport if needed"""
+        # Check if custom host resolution is needed
+        if self.task_config.prefabs.override_hosts:
+            name_solver = NameSolver(self.task_config.prefabs.override_hosts)
+            transport = AsyncCustomHost(name_solver)
+            return httpx.AsyncClient(
+                limits=limits_config, timeout=timeout_config, follow_redirects=True, transport=transport
+            )
+        else:
+            return httpx.AsyncClient(limits=limits_config, timeout=timeout_config, follow_redirects=True)
+
     async def _run_with_shared_client(
         self,
         concurrent_connections: int,
@@ -385,10 +397,11 @@ class Client:
     ):
         limits_config = httpx.Limits(max_keepalive_connections=concurrent_connections)
 
-        async with httpx.AsyncClient(
-            limits=limits_config, timeout=timeout_config, follow_redirects=True
-        ) as shared_client:
+        shared_client = self._create_httpx_client(limits_config, timeout_config)
+        try:
             await self._run_client_loop([shared_client] * concurrent_connections, rate_limiter, end_time)
+        finally:
+            await shared_client.aclose()
 
     async def _run_with_independent_clients(
         self,
@@ -401,10 +414,7 @@ class Client:
 
         clients = []
         try:
-            clients = [
-                httpx.AsyncClient(limits=limits_config, timeout=timeout_config, follow_redirects=True)
-                for _ in range(concurrent_connections)
-            ]
+            clients = [self._create_httpx_client(limits_config, timeout_config) for _ in range(concurrent_connections)]
             await self._run_client_loop(clients, rate_limiter, end_time)
         finally:
             for client in clients:

@@ -1,7 +1,10 @@
+# -*- coding: utf-8 -*-
+# Copyright (c) 2025, DLmaster_361
+# @ MIT License
 import os
 import sys
-from pathlib import Path
 import base64
+from pathlib import Path
 
 root_path = Path(sys.argv[0]).resolve().parent
 
@@ -46,7 +49,7 @@ if not (root_path / "config.json").exists():
             "live_report_interval": 10
         }}
     }}
-}} 
+}}
 '''
     )
 

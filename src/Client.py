@@ -239,7 +239,7 @@ class OverallStats:
             for status_name, count, percentage, latency in sorted_stats:
                 content += "| %-15s | %5d | %6.1f%% | %6.0fms |\n" % (status_name, count, percentage, latency)
 
-        Logger.info(content, end="", flush=True)
+        print(content, end="", flush=True)
 
     def print_final_stats(self):
         elapsed_time = time.time() - self.start_time
@@ -326,7 +326,7 @@ class Client:
 
             self.last_report_time = current_time
         except Exception as e:
-            Logger.warn(f"Failed to report to server: {e}")
+            Logger.warning(f"Failed to report to server: {e}")
 
     async def _report_worker(self, stop_event: asyncio.Event):
         """Background worker for periodic server reporting"""
@@ -361,9 +361,9 @@ class Client:
 
         # Show sample of requests
         for i, request in enumerate(self.task_config.requests[:3]):  # Show first 3 requests
-            Logger.info(f"  [{i+1}] {request.method} {request.url}")
+            Logger.debug(f" [{i+1}] {request.method} {request.url}")
         if len(self.task_config.requests) > 3:
-            Logger.info(f"  ... and {len(self.task_config.requests) - 3} more")
+            Logger.debug(f" ... and {len(self.task_config.requests) - 3} more")
 
         Logger.info(f"End Time: {end_time.isoformat() if end_time else 'No end time set'}")
         Logger.info("-" * 80)
@@ -435,12 +435,18 @@ class Client:
             report_task = asyncio.create_task(self._report_worker(stop_event))
 
         try:
-            # Run test loop
-            while end_time is None or datetime.now().astimezone() < end_time:
-                self.stats.print_live_stats()
-                await asyncio.sleep(0.5)
+            try:
+                Logger.disable_console()
+
+                # Run client main loop
+                while end_time is None or datetime.now().astimezone() < end_time:
+                    self.stats.print_live_stats()
+                    await asyncio.sleep(0.5)
+            finally:
+                Logger.enable_console()
+
         except (asyncio.CancelledError, KeyboardInterrupt):
-            Logger.warn("Client main loop cancelled")
+            Logger.warning("Client main loop cancelled")
         finally:
             stop_event.set()
 

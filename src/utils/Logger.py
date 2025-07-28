@@ -40,20 +40,26 @@ class Logger:
     def disable_console(cls):
         if cls._console is not None:
             loguru.logger.remove(cls._console)
+            cls._console = None
 
     @classmethod
     def disable_file(cls):
         if cls._file is not None:
             loguru.logger.remove(cls._file)
+            cls._file = None
 
     @classmethod
     def reset(cls):
         loguru.logger.remove()
+        loguru.logger.level("DEBUG", color="<blue>")
+        loguru.logger.level("INFO", color="<white>")
+        loguru.logger.level("WARNING", color="<yellow>")
+        loguru.logger.level("ERROR", color="<bold><red>")
 
     debug = loguru.logger.debug
 
     info = loguru.logger.info
 
-    warn = loguru.logger.warning
+    warning = loguru.logger.warning
 
     error = loguru.logger.error

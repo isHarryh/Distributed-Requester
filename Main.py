@@ -62,7 +62,7 @@ async def run_offline_mode(config: Config):
             Logger.error(f"Task '{task.name}' failed: {type(e).__name__} {e}")
             continue
 
-    Logger.info("\nAll tasks completed")
+    Logger.info("All tasks completed")
 
 
 async def run_client_mode(config: Config):
@@ -93,7 +93,7 @@ async def run_client_mode(config: Config):
             Logger.error(f"Error fetching task due to unexpected exception: {type(e).__name__} {e}")
             sys.exit(1)
 
-        Logger.info("\nWaiting for 30s to reconnect to server...")
+        Logger.info("Waiting for 30s to reconnect to server...")
         await asyncio.sleep(30)
 
 

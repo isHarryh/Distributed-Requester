@@ -5,8 +5,8 @@ from datetime import datetime, timezone, timedelta
 from pydantic import BaseModel, Field, field_validator
 
 
-VERSION = "0.2"
-COMPATIBLE_VERSIONS = ["0.1", "0.2"]
+VERSION = "0.3"
+COMPATIBLE_VERSIONS = ["0.1", "0.2", "0.3"]
 
 
 class ConfigError(Exception):

@@ -9,6 +9,7 @@ from threading import Lock
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from src.Config import ReportConfig, load_config
@@ -98,6 +99,7 @@ class Server:
         self.client_records: Dict[str, ClientRecord] = {}
 
         self._setup_routes()
+        self._setup_static_files()
 
     def _cleanup_expired_clients(self):
         with self._clients_lock:
@@ -111,6 +113,15 @@ class Server:
             for client_id in clients_to_remove:
                 Logger.info(f"Removing disconnected client: {client_id}")
                 del self.client_records[client_id]
+
+    def _setup_static_files(self):
+        static_dir = os.path.join(os.path.dirname(__file__), "data", "public")
+
+        if os.path.exists(static_dir):
+            self.app.mount("/", StaticFiles(directory=static_dir, html=True), name="public")
+            Logger.info(f"Static files mounted")
+        else:
+            Logger.warning(f"Static directory not found: {static_dir}")
 
     def _setup_routes(self):
 
@@ -200,11 +211,13 @@ class Server:
 
                 os.makedirs("temp", exist_ok=True)
 
-                filename = f"temp/stats-{time.strftime("%Y%m%d%H")}.json"
+                filename = f"temp/stats-{time.strftime('%Y%m%d%H')}.json"
                 with open(filename, "w") as f:
                     json.dump(stats_data, f, ensure_ascii=False, indent=4)
 
             return StandardResponse(code=0, msg="success", data=stats_data)
+
+        Logger.info("API endpoints mounted")
 
     def run(self, host: str = "0.0.0.0"):
         """Run the server."""

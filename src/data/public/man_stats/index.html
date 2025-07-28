@@ -1,0 +1,785 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Distributed Requester Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.0/dist/chart.umd.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #667eea;
+            min-height: 100vh;
+            min-width: 480px;
+            padding: 12px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 12px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            padding: 30px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+
+        .header h1 {
+            font-size: 2.2rem;
+            color: #2d3748;
+            margin-bottom: 10px;
+            font-weight: 700;
+        }
+
+        .last-updated {
+            color: #718096;
+            font-size: 0.8rem;
+        }
+
+        .section {
+            margin-bottom: 40px;
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+        }
+
+        .section-title {
+            font-size: 1.5rem;
+            color: #2d3748;
+            margin-bottom: 20px;
+            font-weight: 600;
+            border-left: 4px solid #4299e1;
+            padding-left: 15px;
+        }
+
+        /* Response Status Styles */
+        .status-row {
+            display: flex;
+            align-items: center;
+            margin-bottom: 16px;
+            gap: 20px;
+        }
+
+        .status-info {
+            flex: 0 0 420px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .status-text {
+            font-weight: 600;
+            color: #2d3748;
+            min-width: 180px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .status-count {
+            font-weight: 700;
+            color: #2d3748;
+            min-width: 100px;
+            white-space: nowrap;
+            text-align: right;
+        }
+
+        .status-percent {
+            font-weight: 600;
+            color: #a0aec0;
+            min-width: 100px;
+            white-space: nowrap;
+            text-align: right;
+        }
+
+        .status-change {
+            background: #4299e1;
+            color: white;
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            min-width: 50px;
+            text-align: center;
+            opacity: 0;
+            transform: translateX(10px);
+            transition: opacity 0.3s ease, transform 0.3s ease;
+        }
+
+        .status-change.show {
+            opacity: 1;
+            transform: translateX(0);
+        }
+
+        .status-change.positive {
+            background: #4299e1;
+        }
+
+        .status-change.negative {
+            background: #4299e1;
+        }
+
+        .status-bar-container {
+            flex: 1;
+            height: 20px;
+            background: #f1f5f9;
+            border-radius: 10px;
+            overflow: hidden;
+            position: relative;
+            max-width: 50%;
+        }
+
+        .status-bar-fill {
+            height: 100%;
+            border-radius: 10px;
+            transition: width 0.8s ease;
+            position: relative;
+        }
+
+        /* Color mapping based on ResponseStatus enum */
+        .status-success {
+            background: #10b981;
+        }
+
+        .status-information,
+        .status-redirected {
+            background: #f59e0b;
+        }
+
+        .status-http-error {
+            background: #f97316;
+        }
+
+        .status-connect-timeout,
+        .status-read-timeout,
+        .status-write-timeout,
+        .status-pool-timeout {
+            background: #ef4444;
+        }
+
+        .status-network-error,
+        .status-too-many-redirects,
+        .status-uncaught-exception {
+            background: #dc2626;
+        }
+
+        .status-unknown {
+            background: #6b7280;
+        }
+
+        /* Bytes Downloaded Styles */
+        .bytes-container {
+            display: flex;
+            gap: 30px;
+            align-items: center;
+        }
+
+        .bytes-display {
+            flex: 1;
+            text-align: center;
+        }
+
+        .bytes-value {
+            font-size: 2rem;
+            font-weight: 700;
+            color: #2d3748;
+            margin-bottom: 10px;
+        }
+
+        .bytes-change-container {
+            margin-top: 15px;
+        }
+
+        .bytes-change {
+            background: #4299e1;
+            color: white;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 1rem;
+            font-weight: 600;
+            display: inline-block;
+            opacity: 0;
+            transform: translateY(10px);
+            transition: opacity 0.3s ease, transform 0.3s ease;
+        }
+
+        .bytes-change.show {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .bytes-change.positiv,
+        .bytes-change.negative {
+            background: #4299e1;
+        }
+
+        .bytes-chart {
+            flex: 1;
+            height: 200px;
+            background: #f7fafc;
+            border-radius: 8px;
+            display: flex;
+            flex-direction: column;
+            padding: 8px;
+            position: relative;
+        }
+
+        .chart-container {
+            flex: 1;
+            position: relative;
+            min-height: 150px;
+        }
+
+        .bandwidth-stats {
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-around;
+            font-size: 0.8rem;
+        }
+
+        .bandwidth-item {
+            text-align: center;
+        }
+
+        .bandwidth-label {
+            color: #718096;
+            display: block;
+            font-size: 0.8rem;
+        }
+
+        .bandwidth-value {
+            color: #2d3748;
+            font-weight: 600;
+            font-size: 0.8rem;
+        }
+
+        /* Active Clients Styles */
+        .clients-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            justify-content: center;
+            min-height: 60px;
+            align-items: center;
+        }
+
+        .client-circle {
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #4299e1, #3182ce);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: 600;
+            box-shadow: 0 4px 8px rgba(66, 153, 225, 0.3);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% {
+                transform: scale(1);
+            }
+
+            60% {
+                transform: scale(1.1);
+            }
+
+            100% {
+                transform: scale(1);
+            }
+        }
+
+        .no-clients {
+            color: #a0aec0;
+            font-style: italic;
+            text-align: center;
+            width: 100%;
+        }
+
+        /* Loading state */
+        .loading {
+            opacity: 0.6;
+            pointer-events: none;
+        }
+
+        .error-message {
+            background: #fed7d7;
+            color: #c53030;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border-left: 4px solid #f56565;
+        }
+
+        /* Footer Links */
+        .footer-links {
+            margin-top: 30px;
+            text-align: center;
+            padding: 15px 0;
+            border-top: 1px solid #e2e8f0;
+        }
+
+        .footer-links a {
+            color: #718096;
+            text-decoration: none;
+            font-size: 0.8rem;
+            margin: 0 15px;
+            transition: color 0.3s ease;
+        }
+
+        .footer-links a:hover {
+            color: #4299e1;
+        }
+
+        /* Responsive design */
+        @media (max-width: 768px) {
+            .status-info {
+                flex: 0 0 280px;
+            }
+
+            .header h1 {
+                font-size: 1.8rem;
+            }
+
+            .bytes-container {
+                flex-direction: column;
+                gap: 10px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Distributed Requester Dashboard</h1>
+            <div class="last-updated" id="lastUpdated">Last updated: Never</div>
+        </div>
+
+        <div id="errorContainer"></div>
+
+        <div class="section">
+            <h2 class="section-title">Response Status</h2>
+            <div id="statusRows"></div>
+        </div>
+
+        <div class="section">
+            <h2 class="section-title">Data Downloaded</h2>
+            <div class="bytes-container">
+                <div class="bytes-display">
+                    <div class="bytes-value" id="bytesValue">0.000 B</div>
+                    <div class="bytes-change-container">
+                        <div class="bytes-change" id="bytesChange">+0 B</div>
+                    </div>
+                </div>
+                <div class="bytes-chart">
+                    <div class="bandwidth-stats">
+                        <div class="bandwidth-item">
+                            <span class="bandwidth-label">Current</span>
+                            <span class="bandwidth-value" id="currentBandwidth">0 B/s</span>
+                        </div>
+                        <div class="bandwidth-item">
+                            <span class="bandwidth-label">Average</span>
+                            <span class="bandwidth-value" id="averageBandwidth">0 B/s</span>
+                        </div>
+                        <div class="bandwidth-item">
+                            <span class="bandwidth-label">Peak</span>
+                            <span class="bandwidth-value" id="peakBandwidth">0 B/s</span>
+                        </div>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="bandwidthChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2 class="section-title">Active Clients</h2>
+            <div class="clients-container" id="clientsContainer">
+                <div class="no-clients">No active clients</div>
+            </div>
+        </div>
+
+        <div class="footer-links">
+            <a href="/get_config" target="_blank">View current client config file</a>
+            <a href="https://www.itdog.cn" target="_blank">Goto ITDog</a>
+        </div>
+    </div>
+
+    <script>
+        class Dashboard {
+            constructor() {
+                this.previousStats = null;
+                this.previousBytes = 0;
+                this.updateInterval = 10000; // ms
+                this.bandwidthHistory = [];
+                this.maxBandwidthSamples = 100;
+                this.lastUpdateTime = null;
+                this.bandwidthChart = null;
+                this.init();
+            }
+
+            init() {
+                this.initBandwidthChart();
+                this.fetchStats();
+                setInterval(() => this.fetchStats(), this.updateInterval);
+            }
+
+            initBandwidthChart() {
+                const ctx = $('#bandwidthChart')[0].getContext('2d');
+
+                this.bandwidthChart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: [],
+                        datasets: [{
+                            label: 'Bandwidth',
+                            data: [],
+                            borderColor: '#4299e1',
+                            backgroundColor: 'rgba(66, 153, 225, 0.1)',
+                            borderWidth: 2,
+                            fill: true,
+                            tension: 0.4,
+                            pointBackgroundColor: '#4299e1',
+                            pointBorderColor: '#ffffff',
+                            pointBorderWidth: 2,
+                            pointRadius: 3,
+                            pointHoverRadius: 5
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                display: false
+                            }
+                        },
+                        scales: {
+                            x: {
+                                display: true,
+                                grid: {
+                                    color: 'rgba(0, 0, 0, 0.1)'
+                                },
+                                ticks: {
+                                    font: {
+                                        size: 10
+                                    },
+                                    maxTicksLimit: 10
+                                }
+                            },
+                            y: {
+                                display: true,
+                                grid: {
+                                    color: 'rgba(0, 0, 0, 0.1)'
+                                },
+                                ticks: {
+                                    font: {
+                                        size: 10
+                                    },
+                                    callback: (value) => this.formatBandwidthForChart(value)
+                                }
+                            }
+                        },
+                        elements: {
+                            point: {
+                                hoverRadius: 6
+                            }
+                        },
+                        interaction: {
+                            intersect: false,
+                            mode: 'index'
+                        }
+                    }
+                });
+            }
+
+            async fetchStats() {
+                try {
+                    // Clear change indicators before fetching new data
+                    this.clearChangeIndicators();
+
+                    const response = await $.get('/get_stats');
+
+                    if (response.code === 0) {
+                        this.updateDashboard(response.data);
+                        this.updateLastUpdated();
+                        this.clearError();
+                    } else {
+                        this.showError(`Server error: ${response.msg}`);
+                    }
+                } catch (error) {
+                    this.showError(`Failed to fetch stats: ${error.message}`);
+                }
+            }
+
+            updateDashboard(data) {
+                this.updateStatusRows(data.stats);
+                this.updateBytesDownloaded(data.bytes_down);
+                this.updateActiveClients(data.active_clients);
+            }
+
+            updateStatusRows(stats) {
+                const $statusContainer = $('#statusRows');
+                $statusContainer.empty();
+
+                if (!stats || Object.keys(stats).length === 0) {
+                    $statusContainer.html('<div class="no-clients">No status data available</div>');
+                    return;
+                }
+
+                const total = Object.values(stats).reduce((sum, count) => sum + count, 0);
+
+                Object.entries(stats).forEach(([status, count]) => {
+                    const percentage = total > 0 ? (count / total) * 100 : 0;
+                    const previousCount = this.previousStats ? (this.previousStats[status] || 0) : 0;
+                    const change = count - previousCount;
+
+                    const statusRow = this.createStatusRow(status, count, percentage, change);
+                    $statusContainer.append(statusRow);
+                });
+
+                this.previousStats = { ...stats };
+            }
+
+            createStatusRow(status, count, percentage, change) {
+                const statusClass = this.getStatusClass(status);
+                const percentageText = `${percentage.toFixed(1)}%`;
+                const changeId = `change-${status.replace(/\s+/g, '-')}`;
+
+                const $container = $(`
+                    <div class="status-row">
+                        <div class="status-info">
+                            <div class="status-text">${status}</div>
+                            <div class="status-count">${count}</div>
+                            <div class="status-change" id="${changeId}">
+                                ${change > 0 ? '+' : ''}${change}
+                            </div>
+                            <div class="status-percent">${percentageText}</div>
+                        </div>
+                        <div class="status-bar-container">
+                            <div class="status-bar-fill ${statusClass}" style="width: ${percentage}%"></div>
+                        </div>
+                    </div>
+                `);
+
+                // Show change indicator if there's a change
+                if (change !== 0) {
+                    setTimeout(() => {
+                        const $changeEl = $container.find('.status-change');
+                        $changeEl.addClass('show').addClass(change > 0 ? 'positive' : 'negative');
+                    }, 100);
+                }
+
+                return $container;
+            }
+
+            getStatusClass(status) {
+                // Map status strings to CSS classes based on ResponseStatus enum
+                const statusMap = {
+                    'Information': 'status-information',
+                    'Success': 'status-success',
+                    'Redirected': 'status-redirected',
+                    'HTTP Error': 'status-http-error',
+
+                    'Connect Timeout': 'status-connect-timeout',
+                    'Read Timeout': 'status-read-timeout',
+                    'Write Timeout': 'status-write-timeout',
+                    'Pool Timeout': 'status-pool-timeout',
+
+                    'Network Error': 'status-network-error',
+                    'Too Many Redirects': 'status-too-many-redirects',
+                    'Uncaught Exception': 'status-uncaught-exception',
+                    'Unknown': 'status-unknown'
+                };
+
+                // Direct mapping
+                if (statusMap[status]) {
+                    return statusMap[status];
+                }
+
+                // Fallback for HTTP status codes
+                if (status.match(/^1\d\d$/)) return 'status-information';
+                if (status.match(/^2\d\d$/)) return 'status-success';
+                if (status.match(/^3\d\d$/)) return 'status-redirected';
+                if (status.match(/^[45]\d\d$/)) return 'status-http-error';
+
+                // Default for unknown statuses
+                return 'status-unknown';
+            }
+
+            updateBytesDownloaded(bytesDown) {
+                const $bytesValue = $('#bytesValue');
+                const $bytesChange = $('#bytesChange');
+
+                const humanReadable = this.formatBytes(bytesDown);
+                $bytesValue.text(humanReadable);
+
+                const change = bytesDown - this.previousBytes;
+                const currentTime = Date.now();
+
+                // Calculate bandwidth if we have previous data
+                if (this.previousBytes !== 0 && this.lastUpdateTime) {
+                    const timeDiff = (currentTime - this.lastUpdateTime) / 1000; // seconds
+                    const bandwidth = timeDiff > 0 ? change / timeDiff : 0;
+
+                    // Store bandwidth sample
+                    this.bandwidthHistory.push({
+                        bandwidth: bandwidth,
+                        timestamp: currentTime
+                    });
+
+                    if (this.bandwidthHistory.length > this.maxBandwidthSamples) {
+                        this.bandwidthHistory.shift();
+                    }
+
+                    this.updateBandwidthStats();
+                }
+
+                if (change !== 0 && this.previousBytes !== 0) {
+                    const changeText = `${change > 0 ? '+' : ''}${this.formatBytes(Math.abs(change))}`;
+                    $bytesChange.text(changeText);
+
+                    setTimeout(() => {
+                        $bytesChange.addClass('show').addClass(change > 0 ? 'positive' : 'negative');
+                    }, 100);
+                }
+
+                this.previousBytes = bytesDown;
+                this.lastUpdateTime = currentTime;
+            }
+
+            updateBandwidthStats() {
+                if (this.bandwidthHistory.length === 0) return;
+
+                const currentBandwidth = this.bandwidthHistory[this.bandwidthHistory.length - 1].bandwidth;
+                const bandwidths = this.bandwidthHistory.map(item => item.bandwidth);
+
+                const averageBandwidth = bandwidths.reduce((sum, bw) => sum + bw, 0) / bandwidths.length;
+                const peakBandwidth = Math.max(...bandwidths);
+
+                $('#currentBandwidth').text(this.formatBandwidth(currentBandwidth));
+                $('#averageBandwidth').text(this.formatBandwidth(averageBandwidth));
+                $('#peakBandwidth').text(this.formatBandwidth(peakBandwidth));
+
+                this.updateBandwidthChart();
+            }
+
+            updateBandwidthChart() {
+                if (!this.bandwidthChart || this.bandwidthHistory.length === 0) return;
+
+                // Prepare chart data
+                const labels = this.bandwidthHistory.map((item, index) => {
+                    if (index === this.bandwidthHistory.length - 1) return 'Now';
+                    const seconds = (this.bandwidthHistory.length - 1 - index) * 10;
+                    return `${seconds}s`;
+                });
+
+                const data = this.bandwidthHistory.map(item => {
+                    // Convert to KB/s for better chart scaling
+                    return item.bandwidth / 1024;
+                });
+
+                // Update chart
+                this.bandwidthChart.data.labels = labels;
+                this.bandwidthChart.data.datasets[0].data = data;
+
+                // Update y-axis max to provide better scaling
+                const maxValue = Math.max(...data);
+                this.bandwidthChart.options.scales.y.max = maxValue * 1.1;
+
+                this.bandwidthChart.update('none'); // Use 'none' for better performance
+            }
+
+            formatBandwidthForChart(value) {
+                // Format values for chart axis (value is in KB/s)
+                if (value === 0) return '0 KB/s';
+                if (value < 1) return `${(value * 1024).toFixed(0)} B/s`;
+                if (value < 1024) return `${value.toFixed(1)} KB/s`;
+                return `${(value / 1024).toFixed(1)} MB/s`;
+            }
+
+            formatBandwidth(bytesPerSecond) {
+                if (bytesPerSecond === 0) return '0 B/s';
+
+                const k = 1024;
+                const sizes = ['B/s', 'KB/s', 'MB/s', 'GB/s'];
+                const i = Math.floor(Math.log(Math.abs(bytesPerSecond)) / Math.log(k));
+
+                return `${parseFloat((bytesPerSecond / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
+            }
+
+            updateActiveClients(clientCount) {
+                const $container = $('#clientsContainer');
+                $container.empty();
+
+                if (clientCount === 0) {
+                    $container.html('<div class="no-clients">No active clients</div>');
+                    return;
+                }
+
+                for (let i = 1; i <= clientCount; i++) {
+                    const $circle = $(`
+                        <div class="client-circle" style="animation-delay: ${i * 0.1}s">
+                            ${i}
+                        </div>
+                    `);
+                    $container.append($circle);
+                }
+            }
+
+            formatBytes(bytes) {
+                if (bytes === 0) return '0.000 B';
+
+                const k = 1024;
+                const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+                const i = Math.floor(Math.log(bytes) / Math.log(k));
+
+                return `${parseFloat((bytes / Math.pow(k, i)).toFixed(3))} ${sizes[i]}`;
+            }
+
+            clearChangeIndicators() {
+                $('.status-change').removeClass('show positive negative');
+                $('#bytesChange').removeClass('show positive negative');
+            }
+
+            updateLastUpdated() {
+                const now = new Date();
+                const pad = n => n.toString().padStart(2, '0');
+                const dateStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+                $('#lastUpdated').text(`Last updated: ${dateStr}`);
+            }
+
+            showError(message) {
+                $('#errorContainer').html(`<div class="error-message">${message}</div>`);
+            }
+
+            clearError() {
+                $('#errorContainer').empty();
+            }
+        }
+
+        // Initialize dashboard when page loads
+        $(document).ready(() => {
+            new Dashboard();
+        });
+    </script>
+</body>
+
+</html>

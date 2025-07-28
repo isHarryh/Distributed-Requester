@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from src.Config import ReportConfig, load_config
+from src.utils.Logger import Logger
 
 
 # Custom JSON response class for pretty formatting
@@ -90,7 +91,7 @@ class Server:
                     fresh_config = load_config(self.config_path)
                 except Exception as e:
                     # If reading fails, return 502 error
-                    print(f"Error: Failed to read fresh config: {e}")
+                    Logger.error(f"Failed to read fresh config: {e}")
                     raise HTTPException(status_code=502, detail=f"Failed to read config: {e}")
 
             # Random task selection from fresh config

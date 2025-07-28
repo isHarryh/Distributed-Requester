@@ -7,6 +7,7 @@ import httpx
 from src.Config import load_config, TaskConfig, ConfigError, Config, COMPATIBLE_VERSIONS
 from src.Client import Client
 from src.Server import Server
+from src.utils.Logger import Logger
 
 
 class TaskDistributionError(Exception):
@@ -47,88 +48,80 @@ async def fetch_task_from_server(server_url: str) -> TaskConfig:
 async def run_offline_mode(config: Config):
     """Run offline stress test mode"""
 
-    async def run_task(task_config: TaskConfig):
-        """Run a single stress test task"""
-        print(f"\nStarting task: {task_config.name}")
-
-        client = Client(task_config, config)
-        await client.run()
-
-    print("Running in offline mode")
-    print("=" * 50)
+    Logger.info("Running in offline mode")
 
     # Run all tasks
     for _, task in enumerate(config.tasks):
         try:
-            await run_task(task)
+            Logger.info(f"Starting task: {task.name}")
+            await Client(task, config).run()
         except KeyboardInterrupt:
-            print(f"\nTask '{task.name}' interrupted")
+            Logger.error(f"Task '{task.name}' interrupted")
             break
         except Exception as e:
-            print(f"\nTask '{task.name}' failed: {e}")
+            Logger.error(f"Task '{task.name}' failed: {type(e).__name__} {e}")
             continue
 
-    print("\nAll tasks completed")
+    Logger.info("\nAll tasks completed")
 
 
 async def run_client_mode(config: Config):
     """Run distributed client mode"""
 
-    print("Running in client mode")
-    print("=" * 50)
+    Logger.info("Running in client mode")
 
     if not config.client:
-        print("Error: Client configuration is required for distributed mode")
+        Logger.error("Client configuration is required to run client mode")
         sys.exit(1)
 
     while True:
-        print(f"Connecting to server...")
+        Logger.info(f"Connecting to server...")
 
         try:
             # Fetch task from server
+            Logger.info(f"Connecting to server at {config.client.server_url} to fetch task")
             task_config = await fetch_task_from_server(config.client.server_url)
-            print(f"Received task: {task_config.name}")
+            Logger.info(f"Received task: {task_config.name}")
 
             # Create and run client with server reporting enabled
             client = Client(task_config, config)
             await client.run()
 
         except TaskDistributionError as e:
-            print(f"Cannot get new task: {e}")
+            Logger.error(f"Cannot get new task: {e}")
         except Exception as e:
-            print(f"Error: Something went wrong during task execution: {e}")
+            Logger.error(f"Error fetching task due to unexpected exception: {type(e).__name__} {e}")
             sys.exit(1)
 
-        print("\nWaiting for 30s to reconnect to server...")
+        Logger.info("\nWaiting for 30s to reconnect to server...")
         await asyncio.sleep(30)
 
 
 async def run_server_mode(config_path: str):
     """Run server mode"""
 
-    print("Running in server mode")
-    print("=" * 50)
+    Logger.info("Running in server mode")
 
     # Load config to check server configuration
     try:
         config = load_config(config_path)
     except ConfigError as e:
-        print(f"Configuration error: {e}")
+        Logger.error(f"Configuration error: {e}")
         sys.exit(1)
 
     if not config.server:
-        print("Error: Server configuration is required to run server mode")
+        Logger.error("Server configuration is required to run server mode")
         sys.exit(1)
 
     try:
-        print(f"Starting server on port {config.server.port}")
+        Logger.info(f"Starting server on port {config.server.port}")
         server = Server(config_path)
         await server.serve()
 
     except KeyboardInterrupt:
-        print("\nServer stopped")
+        Logger.info("Server stopped due to interruption")
     except Exception as e:
-        print(f"Error: Server failed to start: {e}")
+        Logger.error(f"Server failed due to unexpected exception: {type(e).__name__} {e}")
         sys.exit(1)
 
 
@@ -144,20 +137,23 @@ async def main_async():
 
     # If no arguments, default to client mode with config.json
     if len(sys.argv) == 1:
+        Logger.debug("No arguments provided, defaulting to client mode with config.json")
         args = parser.parse_args(["config.json", "-c"])
     else:
+        Logger.debug("Parsing command line arguments")
         args = parser.parse_args()
 
     # Validate argument combinations
     if args.server and args.client:
-        print("Error: Cannot specify both --server and --client options")
+        Logger.error("Cannot specify both --server and --client options")
         sys.exit(1)
 
     # Load configuration file
     try:
+        Logger.info(f"Loading configuration from: {args.config_file}")
         config = load_config(args.config_file)
     except ConfigError as e:
-        print(f"Configuration error: {e}")
+        Logger.error(f"Configuration error: {e}")
         sys.exit(1)
 
     # Determine run mode
@@ -168,17 +164,23 @@ async def main_async():
     else:
         await run_offline_mode(config)
 
+    Logger.info("Program completed successfully")
+
 
 def main():
     """Main function entry point"""
+    Logger.reset()
+    Logger.enable_console()
+    Logger.enable_file()
+
     try:
         if hasattr(asyncio, "WindowsProactorEventLoopPolicy"):
             asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
         asyncio.run(main_async())
     except KeyboardInterrupt:
-        print("\nProgram interrupted")
+        Logger.error("Program interrupted")
     except Exception as e:
-        print(f"\nProgram execution failed: {e}")
+        Logger.error(f"Program execution failed: {type(e).__name__} {e}")
 
 
 if __name__ == "__main__":

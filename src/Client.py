@@ -12,6 +12,7 @@ from src.Request import RequestWorker, RateLimiter
 from src.utils.StringFormatter import format_delta_time
 from src.utils.ResponseStatus import ResponseStatus
 from src.utils.CustomTransport import AsyncCustomHost, NameSolver
+from src.utils.Logger import Logger
 
 
 class OverallStats:
@@ -238,38 +239,40 @@ class OverallStats:
             for status_name, count, percentage, latency in sorted_stats:
                 content += "| %-15s | %5d | %6.1f%% | %6.0fms |\n" % (status_name, count, percentage, latency)
 
-        print(content, end="", flush=True)
+        Logger.info(content, end="", flush=True)
 
     def print_final_stats(self):
         elapsed_time = time.time() - self.start_time
 
-        print("\n" + "=" * 50)
-        print("Final Statistics")
-        print("=" * 50)
+        Logger.info("\n" + "=" * 50)
+        Logger.info("Final Statistics")
+        Logger.info("=" * 50)
 
         if self.total_requests == 0:
-            print(f"Total Requests: 0 | Duration: {elapsed_time:.1f}s")
+            Logger.info(f"Total Requests: 0 | Duration: {elapsed_time:.1f}s")
             return
 
         success_rate = self.success_requests / self.total_requests * 100
 
-        print(
+        Logger.info(
             f"Total Requests: {self.total_requests} | Success: {self.success_requests} | Failed: {self.failure_requests}"
         )
-        print(f"Success Rate: {success_rate:.1f}% | Duration: {elapsed_time:.1f}s")
-        print(f"Average Latency: {self.get_avg_response_ms():.1f}ms | Average QPS: {self.get_rps():.1f}")
-        print(
+        Logger.info(f"Success Rate: {success_rate:.1f}% | Duration: {elapsed_time:.1f}s")
+        Logger.info(f"Average Latency: {self.get_avg_response_ms():.1f}ms | Average QPS: {self.get_rps():.1f}")
+        Logger.info(
             f"Total Downloaded: {self.bytes_down/1048576:.1f}MB | Average Bandwidth: {self.get_bandwidth_mbps():.1f}Mbps"
         )
-        print(f"Min Latency: {self.min_response_time*1000:.1f}ms | Max Latency: {self.max_response_time*1000:.1f}ms")
+        Logger.info(
+            f"Min Latency: {self.min_response_time*1000:.1f}ms | Max Latency: {self.max_response_time*1000:.1f}ms"
+        )
 
         # Print detailed status breakdown
-        print("\nDetailed Status Breakdown:")
+        Logger.info("Detailed Status Breakdown:")
         sorted_statuses = sorted(self.status_counts.items(), key=lambda x: x[1], reverse=True)
         for status, count in sorted_statuses:
             if count > 0:
                 percentage = count / self.total_requests * 100
-                print(f"  {status.value}: {count} ({percentage:.1f}%)")
+                Logger.info(f"  {status.value}: {count} ({percentage:.1f}%)")
 
 
 class Client:
@@ -323,7 +326,7 @@ class Client:
 
             self.last_report_time = current_time
         except Exception as e:
-            print(f"Warning: Failed to report to server: {e}")
+            Logger.warn(f"Failed to report to server: {e}")
 
     async def _report_worker(self, stop_event: asyncio.Event):
         """Background worker for periodic server reporting"""
@@ -336,8 +339,8 @@ class Client:
                 if not stop_event.is_set():
                     await self._report_to_server()
             except Exception as e:
-                print(f"Warning: Report worker error: {e}")
-                await asyncio.sleep(1)  # Brief pause before retrying
+                Logger.error(f"Report worker error: {e}")
+                await asyncio.sleep(1)
 
     async def _wait_for_start_time(self):
         start_time = self.task_config.policy.schedule.get_start_time()
@@ -345,25 +348,25 @@ class Client:
             now = datetime.now(timezone.utc)
             if start_time > now:
                 wait_seconds = (start_time - now).total_seconds()
-                print(f"Waiting for start time: {start_time.isoformat()} (waiting {wait_seconds:.1f} seconds)")
+                Logger.info(f"Waiting for start time: {start_time.isoformat()} (waiting {wait_seconds:.1f} seconds)")
                 await asyncio.sleep(wait_seconds)
 
     def _print_test_info(self):
         """Print test information"""
         end_time = self.task_config.policy.schedule.get_end_time()
 
-        print(f"Starting {self.task_config.name}...")
-        print(f"Requests: {len(self.task_config.requests)} configured")
-        print(f"Request order: {self.task_config.policy.order}")
+        Logger.info(f"Starting {self.task_config.name}...")
+        Logger.info(f"Requests: {len(self.task_config.requests)} configured")
+        Logger.info(f"Request order: {self.task_config.policy.order}")
 
         # Show sample of requests
         for i, request in enumerate(self.task_config.requests[:3]):  # Show first 3 requests
-            print(f"  [{i+1}] {request.method} {request.url}")
+            Logger.info(f"  [{i+1}] {request.method} {request.url}")
         if len(self.task_config.requests) > 3:
-            print(f"  ... and {len(self.task_config.requests) - 3} more")
+            Logger.info(f"  ... and {len(self.task_config.requests) - 3} more")
 
-        print(f"End Time: {end_time.isoformat() if end_time else 'No end time set'}")
-        print("-" * 80)
+        Logger.info(f"End Time: {end_time.isoformat() if end_time else 'No end time set'}")
+        Logger.info("-" * 80)
 
     def _create_httpx_client(self, limits_config: httpx.Limits, timeout_config: httpx.Timeout) -> httpx.AsyncClient:
         """Create httpx.AsyncClient with custom transport if needed"""
@@ -436,22 +439,25 @@ class Client:
             while end_time is None or datetime.now().astimezone() < end_time:
                 self.stats.print_live_stats()
                 await asyncio.sleep(0.5)
+        except (asyncio.CancelledError, KeyboardInterrupt):
+            Logger.warn("Client main loop cancelled")
         finally:
-            print("\nStopping all workers, please wait...")
+            stop_event.set()
+
             # Stop all workers with timeout
-            await asyncio.gather(*(worker.stop(timeout=10.0) for worker in workers))
+            Logger.info("Stopping all workers, please wait...")
+            await asyncio.gather(*(worker.stop(timeout=5.0) for worker in workers))
 
             # Stop report worker if running
             if report_task:
-                stop_event.set()
                 try:
                     await asyncio.wait_for(report_task, timeout=5.0)
                 except asyncio.TimeoutError:
                     report_task.cancel()
 
-        # Send final report to server
-        if self.server_url and self.report_interval > 0:
-            await self._report_to_server()
+            # Send final report to server
+            if self.server_url and self.report_interval > 0:
+                await self._report_to_server()
 
     async def run(self):
         # Wait for start time
@@ -486,9 +492,8 @@ class Client:
                 await self._run_with_independent_clients(concurrent_connections, timeout_config, rate_limiter, end_time)
 
         except Exception as e:
-            if "Force exit" not in str(e):
-                print(f"\nError during testing: {e}")
-                return
+            Logger.error(f"Error in client: {type(e).__name__} {e}")
+            return
 
         # Print final statistics
         self.stats.print_final_stats()

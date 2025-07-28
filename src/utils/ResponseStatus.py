@@ -45,7 +45,6 @@ class ResponseStatus(StrEnum):
         elif isinstance(response, httpx.TooManyRedirects):
             return ResponseStatus.TOO_MANY_REDIRECTS
         elif isinstance(response, Exception):
-            print(type(response))
             return ResponseStatus.UNCAUGHT_EXCEPTION
         return ResponseStatus.UNKNOWN
 

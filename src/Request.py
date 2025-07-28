@@ -1,5 +1,5 @@
 from enum import StrEnum
-from typing import Optional, Union
+from typing import Callable, Optional, Union
 import asyncio
 import json
 import random
@@ -8,18 +8,6 @@ import time
 import httpx
 
 from src.Config import TaskConfig, RequestConfig
-
-
-class ResponseStatus(StrEnum):
-    """Response status categories."""
-
-    SUCCESS = "Success"
-    HTTP_4XX = "HTTP 4xx"
-    HTTP_5XX = "HTTP 5xx"
-    HTTP_ERROR = "HTTP Error"
-    TIMEOUT = "Timeout"
-    TIMEOUT_CONNECT = "Timeout Connect"
-    EXCEPTION = "Exception"
 
 
 class RequestState(StrEnum):
@@ -55,22 +43,20 @@ class RequestWorker:
         task_config: TaskConfig,
         session: httpx.AsyncClient,
         rate_limiter: Optional[RateLimiter] = None,
+        response_callback: Optional[Callable[[Union[httpx.Response, Exception], float], None]] = None,
     ):
         self.task_config = task_config
         self.session = session
         self.rate_limiter = rate_limiter
-        self.state = RequestState.WAITING
-        self._task: Optional[asyncio.Task] = None
-        self._stop_event = asyncio.Event()
-        self._stats_callback = None
+        self.response_callback = response_callback
 
-    def set_stats_callback(self, callback):
-        """Set callback function to report statistics"""
-        self._stats_callback = callback
+        self._task: Optional[asyncio.Task] = None
+        self._state = RequestState.WAITING
+        self._stop_event = asyncio.Event()
 
     def get_state(self) -> RequestState:
         """Get current worker state"""
-        return self.state
+        return self._state
 
     async def join(self, timeout: Optional[float] = None) -> bool:
         """Wait for task completion with optional timeout"""
@@ -100,21 +86,6 @@ class RequestWorker:
                 return str(request_config.data)
         return None
 
-    def _classify_response(self, response: Union[httpx.Response, Exception]) -> ResponseStatus:
-        """Classify response into status category"""
-        if isinstance(response, httpx.Response):
-            return {
-                2: ResponseStatus.SUCCESS,
-                4: ResponseStatus.HTTP_4XX,
-                5: ResponseStatus.HTTP_5XX,
-            }.get(response.status_code // 100, ResponseStatus.HTTP_ERROR)
-        elif isinstance(response, httpx.ConnectTimeout):
-            return ResponseStatus.TIMEOUT_CONNECT
-        elif isinstance(response, httpx.TimeoutException):
-            return ResponseStatus.TIMEOUT
-        else:
-            return ResponseStatus.EXCEPTION
-
     @staticmethod
     def estimate_response_size(response: httpx.Response) -> int:
         """Estimate the total size of request and response"""
@@ -125,7 +96,7 @@ class RequestWorker:
         response_body_len = len(response.content) if response.content else 0
         return request_headers_len + request_body_len + response_headers_len + response_body_len
 
-    async def _execute_request(self) -> tuple[Union[httpx.Response, Exception], float, int]:
+    async def _execute_request(self) -> tuple[Union[httpx.Response, Exception], float]:
         """Execute a single request and return response, time taken, and bytes count"""
         # Select request for this iteration
         request_config = self._select_request()
@@ -139,24 +110,21 @@ class RequestWorker:
         start_time = time.time()
 
         try:
-            self.state = RequestState.WORKING
+            self._state = RequestState.WORKING
 
             if post_data is not None:
                 response = await self.session.post(request_config.url, content=post_data, headers=merged_headers)
             else:
                 response = await self.session.get(request_config.url, headers=merged_headers)
 
-            # Calculate bytes transferred
-            bytes_count = self.estimate_response_size(response) if isinstance(response, httpx.Response) else 0
-
         except Exception as e:
             response = e
             bytes_count = 0
         finally:
-            self.state = RequestState.WAITING
+            self._state = RequestState.WAITING
 
         response_time = time.time() - start_time
-        return response, response_time, bytes_count
+        return response, response_time
 
     async def _run(self):
         """Internal run method"""
@@ -168,23 +136,22 @@ class RequestWorker:
                 if self._stop_event.is_set():
                     break
 
-                response, response_time, bytes_count = await self._execute_request()
+                response, response_time = await self._execute_request()
 
                 # Report statistics if callback is set
-                if self._stats_callback:
-                    status = self._classify_response(response)
-                    self._stats_callback(response, time.time() - response_time, status, response_time, bytes_count)
+                if self.response_callback:
+                    self.response_callback(response, time.time() - response_time)
 
                 if self._stop_event.is_set():
                     break
 
         finally:
-            self.state = RequestState.STOPPED
+            self._state = RequestState.STOPPED
 
     def start(self):
         """Start the worker task"""
         if self._task is None or self._task.done():
-            self.state = RequestState.WAITING
+            self._state = RequestState.WAITING
             self._stop_event.clear()
             self._task = asyncio.create_task(self._run())
 
@@ -207,7 +174,7 @@ class RequestWorker:
                     pass
             except asyncio.CancelledError:
                 pass
-        self.state = RequestState.STOPPED
+        self._state = RequestState.STOPPED
 
     def __del__(self):
         """Cleanup when worker is destroyed"""

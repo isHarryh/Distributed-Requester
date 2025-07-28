@@ -8,8 +8,9 @@ from threading import Lock
 import httpx
 
 from src.Config import TaskConfig, Config
-from src.Request import ResponseStatus, RequestWorker, RateLimiter
+from src.Request import RequestWorker, RateLimiter
 from src.utils.StringFormatter import format_delta_time
+from src.utils.ResponseStatus import ResponseStatus
 from src.utils.CustomTransport import AsyncCustomHost, NameSolver
 
 
@@ -50,34 +51,22 @@ class OverallStats:
         with self._lock:
             response_time = time.time() - start_time
 
-            if isinstance(response, httpx.Response):
+            response_status = ResponseStatus.of(response)
+
+            if not response_status.is_exception():
+                assert isinstance(response, httpx.Response)
                 bytes_down = OverallStats._estimate_request_size(response)
                 self.bytes_down += bytes_down
 
-                status = {
-                    2: ResponseStatus.SUCCESS,
-                    4: ResponseStatus.HTTP_4XX,
-                    5: ResponseStatus.HTTP_5XX,
-                }.get(response.status_code // 100, ResponseStatus.HTTP_ERROR)
-
-                if status == ResponseStatus.SUCCESS:
+                if response_status == ResponseStatus.SUCCESS:
                     self.success_requests += 1
                 else:
                     self.failure_requests += 1
-            elif isinstance(response, httpx.ConnectTimeout):
-                bytes_down = 0
-                status = ResponseStatus.TIMEOUT_CONNECT
-                self.failure_requests += 1
-            elif isinstance(response, httpx.TimeoutException):
-                bytes_down = 0
-                status = ResponseStatus.TIMEOUT
-                self.failure_requests += 1
             else:
                 bytes_down = 0
-                status = ResponseStatus.EXCEPTION
                 self.failure_requests += 1
 
-            self.status_counts[status] += 1
+            self.status_counts[response_status] += 1
 
             self.total_requests += 1
             self.total_response_time += response_time
@@ -93,7 +82,7 @@ class OverallStats:
 
             # Add data to current second
             current_second = self.second_stats[-1][1]
-            current_second["status_times"][status].append(response_time)
+            current_second["status_times"][response_status].append(response_time)
             current_second["bytes_down"] += bytes_down
 
     def get_avg_response_ms(self) -> float:
@@ -429,11 +418,9 @@ class Client:
         stop_event = asyncio.Event()
 
         # Create worker instances
-        workers = [RequestWorker(self.task_config, session, rate_limiter) for session in sessions]
-
-        # Set stats callback for each worker
-        for worker in workers:
-            worker.set_stats_callback(self._stats_callback)
+        workers = [
+            RequestWorker(self.task_config, session, rate_limiter, self.stats.add_result) for session in sessions
+        ]
 
         # Start all workers
         for worker in workers:
@@ -465,10 +452,6 @@ class Client:
         # Send final report to server
         if self.server_url and self.report_interval > 0:
             await self._report_to_server()
-
-    def _stats_callback(self, response, start_time, status, response_time, bytes_count):
-        """Callback function for workers to report statistics"""
-        self.stats.add_result(response, start_time)
 
     async def run(self):
         # Wait for start time

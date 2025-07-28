@@ -1,6 +1,7 @@
 from typing import Optional, Union, List
 import asyncio
 import time
+import uuid
 from collections import deque
 from datetime import datetime, timezone
 from threading import Lock
@@ -297,8 +298,8 @@ class Client:
         self.stats = OverallStats(partial_span=partial_span)
         self.server_config = server_config
         self.last_report_time = time.time()
+        self.client_id = str(uuid.uuid4())
 
-        # Server reporting setup
         if server_config and server_config.client:
             self.report_interval = server_config.client.report.live_report_interval
             self.server_url = server_config.client.server_url
@@ -309,6 +310,8 @@ class Client:
         # Track previous stats for incremental reporting
         self.last_reported_status_counts = {status: 0 for status in ResponseStatus}
         self.last_reported_bytes_down = 0
+
+        Logger.info(f"Client initialized with ID {self.client_id} (report interval {self.report_interval}s)")
 
     async def _report_to_server(self):
         """Report incremental statistics to server"""
@@ -331,7 +334,13 @@ class Client:
         incremental_bytes = self.stats.bytes_down - self.last_reported_bytes_down
         self.last_reported_bytes_down = self.stats.bytes_down
 
-        report_data = {"span": span, "stats": incremental_stats, "bytes_down": incremental_bytes}
+        report_data = {
+            "client_id": self.client_id,
+            "client_ttl": self.report_interval,
+            "span": span,
+            "stats": incremental_stats,
+            "bytes_down": incremental_bytes,
+        }
 
         try:
             async with httpx.AsyncClient() as client:

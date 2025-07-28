@@ -35,15 +35,37 @@ class StandardResponse(BaseModel):
 
 
 class UploadLiveRequest(BaseModel):
+    client_id: str
+    client_ttl: int
     span: float
     stats: Dict[str, int]
     bytes_down: int
 
 
+class ClientRecord:
+    """Client connection record with timeout tracking."""
+
+    def __init__(self, client_id: str, client_ttl: int):
+        self.client_id = client_id
+        self.client_ttl = client_ttl
+        self.last_seen = time.time()
+        self.is_marked_disconnected = False
+
+    def update_last_seen(self):
+        self.last_seen = time.time()
+
+    def is_expired(self) -> bool:
+        return time.time() - self.last_seen > self.client_ttl
+
+    def should_be_removed(self) -> bool:
+        return self.is_marked_disconnected and self.is_expired()
+
+
 class ClientReport:
     """Client report data."""
 
-    def __init__(self, span: float, stats: Dict[str, int], bytes_down: int):
+    def __init__(self, client_id: str, span: float, stats: Dict[str, int], bytes_down: int):
+        self.client_id = client_id
         self.timestamp = time.time()
         self.span = span
         self.stats = stats
@@ -68,12 +90,27 @@ class Server:
 
         self._stats_lock = Lock()
         self._config_lock = Lock()
+        self._clients_lock = Lock()
 
         self.total_stats: Dict[str, int] = defaultdict(int)
         self.total_bytes_down = 0
         self.client_reports: deque = deque()
+        self.client_records: Dict[str, ClientRecord] = {}
 
         self._setup_routes()
+
+    def _cleanup_expired_clients(self):
+        with self._clients_lock:
+            clients_to_remove = []
+            for client_id, record in self.client_records.items():
+                if record.should_be_removed():
+                    clients_to_remove.append(client_id)
+                elif record.is_expired() and not record.is_marked_disconnected:
+                    record.is_marked_disconnected = True
+
+            for client_id in clients_to_remove:
+                Logger.info(f"Removing disconnected client: {client_id}")
+                del self.client_records[client_id]
 
     def _setup_routes(self):
 
@@ -90,9 +127,9 @@ class Server:
                 try:
                     fresh_config = load_config(self.config_path)
                 except Exception as e:
-                    # If reading fails, return 502 error
+                    # If reading fails, return 500 error
                     Logger.error(f"Failed to read fresh config: {e}")
-                    raise HTTPException(status_code=502, detail=f"Failed to read config: {e}")
+                    raise HTTPException(status_code=500, detail=f"Failed to read config: {e}")
 
             # Random task selection from fresh config
             selected_task = random.choice(fresh_config.tasks) if fresh_config.tasks else None
@@ -108,13 +145,24 @@ class Server:
         @self.app.post("/upload_live", response_model=StandardResponse)
         async def upload_live(request: UploadLiveRequest):
             """Upload live statistics from client."""
+            # Clean up expired clients first
+            self._cleanup_expired_clients()
+
             # Store client report
-            report = ClientReport(request.span, request.stats, request.bytes_down)
-            interval = (
-                self.config.client.report.live_report_interval
-                if self.config.client and self.config.client.report
-                else ReportConfig().live_report_interval
-            )
+            report = ClientReport(request.client_id, request.span, request.stats, request.bytes_down)
+
+            # Update or create client record
+            with self._clients_lock:
+                if request.client_id in self.client_records:
+                    # Update existing client record
+                    client_record = self.client_records[request.client_id]
+                    client_record.update_last_seen()
+                    client_record.is_marked_disconnected = False
+                    client_record.client_ttl = request.client_ttl
+                else:
+                    # Create new client record
+                    Logger.info(f"New client connected: {request.client_id}")
+                    self.client_records[request.client_id] = ClientRecord(request.client_id, request.client_ttl)
 
             with self._stats_lock:
                 self.client_reports.append(report)
@@ -126,6 +174,11 @@ class Server:
                 self.total_bytes_down += request.bytes_down
 
                 # Clean old reports
+                interval = (
+                    self.config.client.report.live_report_interval
+                    if self.config.client and self.config.client.report
+                    else ReportConfig().live_report_interval
+                )
                 current_time = time.time()
                 while self.client_reports and current_time - self.client_reports[0].timestamp > interval * 2:
                     self.client_reports.popleft()
@@ -135,21 +188,14 @@ class Server:
         @self.app.get("/get_stats", response_model=StandardResponse)
         async def get_stats():
             """Get aggregated statistics."""
+            # Clean up expired clients before returning stats
+            self._cleanup_expired_clients()
+
             with self._stats_lock:
-                # Count active clients (reported within live_report_interval)
-                current_time = time.time()
-                interval = (
-                    self.config.client.report.live_report_interval
-                    if self.config.client and self.config.client.report
-                    else ReportConfig().live_report_interval
-                )
-
-                active_clients = sum(1 for report in self.client_reports if current_time - report.timestamp <= interval)
-
                 stats_data = {
                     "stats": dict(self.total_stats),
                     "bytes_down": self.total_bytes_down,
-                    "active_clients": active_clients,
+                    "active_clients": len(self.client_records),
                 }
 
                 os.makedirs("temp", exist_ok=True)

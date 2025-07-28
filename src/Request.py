@@ -43,7 +43,7 @@ class RequestWorker:
         task_config: TaskConfig,
         session: httpx.AsyncClient,
         rate_limiter: Optional[RateLimiter] = None,
-        response_callback: Optional[Callable[[Union[httpx.Response, Exception], float], None]] = None,
+        response_callback: Optional[Callable[[httpx.Request, Union[httpx.Response, Exception], float], None]] = None,
     ):
         self.task_config = task_config
         self.session = session
@@ -96,7 +96,7 @@ class RequestWorker:
         response_body_len = len(response.content) if response.content else 0
         return request_headers_len + request_body_len + response_headers_len + response_body_len
 
-    async def _execute_request(self) -> tuple[Union[httpx.Response, Exception], float]:
+    async def _execute_request(self) -> tuple[httpx.Request, Union[httpx.Response, Exception], float]:
         """Execute a single request and return response, time taken, and bytes count"""
         # Select request for this iteration
         request_config = self._select_request()
@@ -107,24 +107,23 @@ class RequestWorker:
         merged_headers.update(self.task_config.prefabs.default_headers)
         merged_headers.update(request_config.headers)
 
+        if post_data is not None:
+            request = self.session.build_request("POST", request_config.url, content=post_data, headers=merged_headers)
+        else:
+            request = self.session.build_request("GET", request_config.url, headers=merged_headers)
+
         start_time = time.time()
 
         try:
             self._state = RequestState.WORKING
-
-            if post_data is not None:
-                response = await self.session.post(request_config.url, content=post_data, headers=merged_headers)
-            else:
-                response = await self.session.get(request_config.url, headers=merged_headers)
-
+            response = await self.session.send(request)
         except Exception as e:
             response = e
-            bytes_count = 0
         finally:
             self._state = RequestState.WAITING
 
         response_time = time.time() - start_time
-        return response, response_time
+        return request, response, response_time
 
     async def _run(self):
         """Internal run method"""
@@ -136,11 +135,11 @@ class RequestWorker:
                 if self._stop_event.is_set():
                     break
 
-                response, response_time = await self._execute_request()
+                request, response, response_time = await self._execute_request()
 
                 # Report statistics if callback is set
                 if self.response_callback:
-                    self.response_callback(response, time.time() - response_time)
+                    self.response_callback(request, response, time.time() - response_time)
 
                 if self._stop_event.is_set():
                     break

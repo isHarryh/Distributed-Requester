@@ -10,7 +10,7 @@ import httpx
 from src.Config import TaskConfig, Config
 from src.Request import RequestWorker, RateLimiter
 from src.utils.StringFormatter import format_delta_time
-from src.utils.ResponseStatus import ResponseStatus
+from src.utils.ResponseStatus import HttpStatus, ResponseStatus
 from src.utils.CustomTransport import AsyncCustomHost, NameSolver
 from src.utils.Logger import Logger
 
@@ -48,7 +48,7 @@ class OverallStats:
         response_body_len = len(response.content) if response.content else 0
         return request_headers_len + request_body_len + response_headers_len + response_body_len
 
-    def add_result(self, response: Union[httpx.Response, Exception], start_time: float):
+    def add_result(self, request: httpx.Request, response: Union[httpx.Response, Exception], start_time: float):
         with self._lock:
             response_time = time.time() - start_time
 
@@ -59,11 +59,25 @@ class OverallStats:
                 bytes_down = OverallStats._estimate_request_size(response)
                 self.bytes_down += bytes_down
 
+                http_status = HttpStatus.of(response)
+                Logger.debug(
+                    f"{request.method} {response_status.name} {http_status} {request.url} "
+                    + f"in {response_time*1000:.0f}ms, "
+                    + f"preview: `{response.content[:64] if len(response.content) > 64 else response.content}` "
+                    + f"(full {len(response.content)}B)"
+                )
+
                 if response_status == ResponseStatus.SUCCESS:
                     self.success_requests += 1
                 else:
                     self.failure_requests += 1
             else:
+                Logger.debug(
+                    f"{request.method} {response_status.name} {request.url} "
+                    + f"in {response_time*1000:.0f}ms, "
+                    + f"{type(response).__name__} {response}"
+                )
+
                 bytes_down = 0
                 self.failure_requests += 1
 

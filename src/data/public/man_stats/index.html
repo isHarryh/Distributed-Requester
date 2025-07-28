@@ -137,7 +137,7 @@
 
         .status-bar-container {
             flex: 1 1 0%;
-            height: 20px;
+            height: 15px;
             background: #f1f5f9;
             border-radius: 10px;
             overflow: hidden;
@@ -232,7 +232,7 @@
 
         .bytes-chart {
             flex: 1;
-            height: 200px;
+            height: 240px;
             background: #f7fafc;
             border-radius: 8px;
             display: flex;
@@ -473,7 +473,7 @@
 
         <div class="footer-links">
             <a href="/get_config" target="_blank">View current client config file</a>
-            <a href="https://www.itdog.cn" target="_blank">Goto ITDog</a>
+            <a href="https://www.itdog.cn/http" target="_blank">Goto ITDog</a>
         </div>
     </div>
 
@@ -484,7 +484,7 @@
                 this.previousBytes = 0;
                 this.updateInterval = 10000; // ms
                 this.bandwidthHistory = [];
-                this.maxBandwidthSamples = 100;
+                this.maxBandwidthHistoryTime = 10 * 60 * 1000; // ms
                 this.lastUpdateTime = null;
                 this.bandwidthChart = null;
                 this.init();
@@ -503,20 +503,32 @@
                     type: 'line',
                     data: {
                         labels: [],
-                        datasets: [{
-                            label: 'Bandwidth',
-                            data: [],
-                            borderColor: '#4299e1',
-                            backgroundColor: 'rgba(66, 153, 225, 0.1)',
-                            borderWidth: 2,
-                            fill: true,
-                            tension: 0.4,
-                            pointBackgroundColor: '#4299e1',
-                            pointBorderColor: '#ffffff',
-                            pointBorderWidth: 2,
-                            pointRadius: 3,
-                            pointHoverRadius: 5
-                        }]
+                        datasets: [
+                            {
+                                label: 'Bandwidth',
+                                data: [],
+                                borderColor: '#4299e1',
+                                backgroundColor: 'rgba(66, 153, 225, 0.1)',
+                                borderWidth: 2,
+                                fill: true,
+                                tension: 0.4,
+                                pointBackgroundColor: '#4299e1',
+                                pointRadius: 0,
+                                pointHoverRadius: 5
+                            },
+                            {
+                                label: 'Average',
+                                data: [],
+                                borderColor: '#f59e0b',
+                                backgroundColor: 'rgba(0, 0, 0, 0)',
+                                borderWidth: 1.5,
+                                borderDash: [6, 6],
+                                fill: false,
+                                pointRadius: 0,
+                                pointHoverRadius: 0,
+                                order: 1
+                            }
+                        ]
                     },
                     options: {
                         responsive: true,
@@ -524,6 +536,17 @@
                         plugins: {
                             legend: {
                                 display: false
+                            },
+                            tooltip: {
+                                callbacks: {
+                                    label: (context) => {
+                                        if (context.datasetIndex === 0 || context.datasetIndex === 1) {
+                                            const label = context.datasetIndex === 0 ? 'Bandwidth' : 'Average';
+                                            return `${label}: ${this.formatBandwidthForChart(context.parsed.y, 2)}`;
+                                        }
+                                        return context.formattedValue;
+                                    }
+                                }
                             }
                         },
                         scales: {
@@ -536,7 +559,18 @@
                                     font: {
                                         size: 10
                                     },
-                                    maxTicksLimit: 10
+                                    maxTicksLimit: 8,
+                                    callback: function (value, index, values) {
+                                        // Only show every nth label to avoid crowding
+                                        if (values.length > 8) {
+                                            const step = Math.ceil(values.length / 6);
+                                            if (index % step === 0 || index === values.length - 1) {
+                                                return this.getLabelForValue(value);
+                                            }
+                                            return '';
+                                        }
+                                        return this.getLabelForValue(value);
+                                    }
                                 }
                             },
                             y: {
@@ -548,7 +582,8 @@
                                     font: {
                                         size: 10
                                     },
-                                    callback: (value) => this.formatBandwidthForChart(value)
+                                    maxTicksLimit: 5,
+                                    callback: (value) => this.formatBandwidthForChart(value, 1)
                                 }
                             }
                         },
@@ -592,7 +627,6 @@
 
             updateStatusRows(stats) {
                 const $statusContainer = $('#statusRows');
-                $statusContainer.empty();
 
                 if (!stats || Object.keys(stats).length === 0) {
                     $statusContainer.html('<div class="no-clients">No status data available</div>');
@@ -601,25 +635,41 @@
 
                 const total = Object.values(stats).reduce((sum, count) => sum + count, 0);
 
+                $statusContainer.children('.status-row').detach();
                 Object.entries(stats).forEach(([status, count]) => {
                     const percentage = total > 0 ? (count / total) * 100 : 0;
                     const previousCount = this.previousStats ? (this.previousStats[status] || 0) : 0;
                     const change = count - previousCount;
+                    const statusId = `status-row-${status.replace(/\s+/g, '-')}`;
+                    let $row = $(`#${statusId}`);
+                    if ($row.length === 0) {
+                        // First render
+                        $row = this.createStatusRow(status, count, percentage, change, statusId);
+                        $statusContainer.append($row);
+                    } else {
+                        $row.find('.status-count').text(count);
+                        $row.find('.status-percent').text(`${percentage.toFixed(1)}%`);
+                        $row.find('.status-bar-fill').css('width', `${percentage}%`);
 
-                    const statusRow = this.createStatusRow(status, count, percentage, change);
-                    $statusContainer.append(statusRow);
+                        const $change = $row.find('.status-change');
+                        $change.text((change > 0 ? '+' : '') + change);
+                        if (change !== 0) {
+                            setTimeout(() => {
+                                $change.addClass('show').addClass(change > 0 ? 'positive' : 'negative');
+                            }, 100);
+                        }
+                        $statusContainer.append($row);
+                    }
                 });
 
                 this.previousStats = { ...stats };
             }
-
-            createStatusRow(status, count, percentage, change) {
+            createStatusRow(status, count, percentage, change, statusId) {
                 const statusClass = this.getStatusClass(status);
                 const percentageText = `${percentage.toFixed(1)}%`;
                 const changeId = `change-${status.replace(/\s+/g, '-')}`;
-
-                const $container = $(`
-                    <div class="status-row">
+                const $container = $(
+                    `<div class="status-row" id="${statusId}">
                         <div class="status-info">
                             <div class="status-text">${status}</div>
                             <div class="status-count">${count}</div>
@@ -631,17 +681,14 @@
                         <div class="status-bar-container">
                             <div class="status-bar-fill ${statusClass}" style="width: ${percentage}%"></div>
                         </div>
-                    </div>
-                `);
-
-                // Show change indicator if there's a change
+                    </div>`
+                );
                 if (change !== 0) {
                     setTimeout(() => {
                         const $changeEl = $container.find('.status-change');
                         $changeEl.addClass('show').addClass(change > 0 ? 'positive' : 'negative');
                     }, 100);
                 }
-
                 return $container;
             }
 
@@ -694,15 +741,15 @@
                     const timeDiff = (currentTime - this.lastUpdateTime) / 1000; // seconds
                     const bandwidth = timeDiff > 0 ? change / timeDiff : 0;
 
-                    // Store bandwidth sample
+                    // Store bandwidth sample with actual timestamp
                     this.bandwidthHistory.push({
                         bandwidth: bandwidth,
                         timestamp: currentTime
                     });
 
-                    if (this.bandwidthHistory.length > this.maxBandwidthSamples) {
-                        this.bandwidthHistory.shift();
-                    }
+                    // Remove old samples (older than maxBandwidthHistoryTime)
+                    const cutoffTime = currentTime - this.maxBandwidthHistoryTime;
+                    this.bandwidthHistory = this.bandwidthHistory.filter(item => item.timestamp > cutoffTime);
 
                     this.updateBandwidthStats();
                 }
@@ -739,11 +786,13 @@
             updateBandwidthChart() {
                 if (!this.bandwidthChart || this.bandwidthHistory.length === 0) return;
 
-                // Prepare chart data
-                const labels = this.bandwidthHistory.map((item, index) => {
-                    if (index === this.bandwidthHistory.length - 1) return 'Now';
-                    const seconds = (this.bandwidthHistory.length - 1 - index) * 10;
-                    return `${seconds}s`;
+                // Prepare chart data with actual timestamps
+                const labels = this.bandwidthHistory.map(item => {
+                    const date = new Date(item.timestamp);
+                    const hours = date.getHours().toString().padStart(2, '0');
+                    const minutes = date.getMinutes().toString().padStart(2, '0');
+                    const seconds = date.getSeconds().toString().padStart(2, '0');
+                    return `${hours}:${minutes}:${seconds}`;
                 });
 
                 const data = this.bandwidthHistory.map(item => {
@@ -751,23 +800,29 @@
                     return item.bandwidth / 1024;
                 });
 
+                // Calculate average value for the visible window
+                const avg = data.length > 0 ? data.reduce((a, b) => a + b, 0) / data.length : 0;
+                const avgLine = data.map(() => avg);
+
                 // Update chart
                 this.bandwidthChart.data.labels = labels;
                 this.bandwidthChart.data.datasets[0].data = data;
+                this.bandwidthChart.data.datasets[1].data = avgLine;
 
                 // Update y-axis max to provide better scaling
-                const maxValue = Math.max(...data);
+                const maxValue = Math.max(...data, avg);
                 this.bandwidthChart.options.scales.y.max = maxValue * 1.1;
 
                 this.bandwidthChart.update('none'); // Use 'none' for better performance
             }
 
-            formatBandwidthForChart(value) {
+            formatBandwidthForChart(value, digits) {
                 // Format values for chart axis (value is in KB/s)
                 if (value === 0) return '0 KB/s';
                 if (value < 1) return `${(value * 1024).toFixed(0)} B/s`;
-                if (value < 1024) return `${value.toFixed(1)} KB/s`;
-                return `${(value / 1024).toFixed(1)} MB/s`;
+                if (value < 1024) return `${value.toFixed(digits)} KB/s`;
+                if (value < 1024 * 1024) return `${(value / 1024).toFixed(digits)} MB/s`;
+                return `${(value / 1024 / 1024).toFixed(digits)} GB/s`;
             }
 
             formatBandwidth(bytesPerSecond) {
@@ -778,6 +833,16 @@
                 const i = Math.floor(Math.log(Math.abs(bytesPerSecond)) / Math.log(k));
 
                 return `${parseFloat((bytesPerSecond / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
+            }
+
+            formatBytes(bytes) {
+                if (bytes === 0) return '0.000 B';
+
+                const k = 1024;
+                const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+                const i = Math.floor(Math.log(bytes) / Math.log(k));
+
+                return `${parseFloat((bytes / Math.pow(k, i)).toFixed(3))} ${sizes[i]}`;
             }
 
             updateActiveClients(clientCount) {
@@ -797,16 +862,6 @@
                     `);
                     $container.append($circle);
                 }
-            }
-
-            formatBytes(bytes) {
-                if (bytes === 0) return '0.000 B';
-
-                const k = 1024;
-                const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-                const i = Math.floor(Math.log(bytes) / Math.log(k));
-
-                return `${parseFloat((bytes / Math.pow(k, i)).toFixed(3))} ${sizes[i]}`;
             }
 
             clearChangeIndicators() {

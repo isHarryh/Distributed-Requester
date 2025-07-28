@@ -212,19 +212,7 @@ def load_config(config_path: str) -> Config:
             raise FileNotFoundError(config_path)
 
         with open(path, "r", encoding="utf-8") as f:
-            content = f.read()
-            # Remove JSONC comments (simple implementation)
-            lines = content.split("\n")
-            clean_lines = []
-            for line in lines:
-                # Remove line comments
-                if "//" in line:
-                    line = line[: line.index("//")]
-                clean_lines.append(line)
-            clean_content = "\n".join(clean_lines)
-
-            # Parse JSON and create Pydantic object
-            data = json.loads(clean_content)
+            data = json.loads(f.read())
             return Config(**data)
 
     except FileNotFoundError:

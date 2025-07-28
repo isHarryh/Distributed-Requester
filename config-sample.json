@@ -8,7 +8,7 @@
             "name": "Example Task", // required
             "requests": [ // required, must not be empty
                 {
-                    "url": "https:\/\/httpbin.org/get", // required
+                    "url": "https://httpbin.org/get", // required
                     "method": "GET", // optional, default to "GET"
                     "headers": { // optional
                         "Content-Type": "application/json",
@@ -16,7 +16,7 @@
                     }
                 },
                 {
-                    "url": "https:\/\/httpbin.org/post",
+                    "url": "https://httpbin.org/post",
                     "method": "POST",
                     "data": "value1=data1&value2=data2" // can also be object, for POST/PUT/PATCH methods only
                 }
@@ -57,7 +57,7 @@
         }
     },
     "client": { // optional (required if running as distributed client)
-        "server_url": "http:\/\/127.0.0.1:5000", // required
+        "server_url": "http://127.0.0.1:5000", // required
         "report": { // optional
             "live_report_interval": 30 // optional, default to 30, omitted/null/0 means no reporting
         }

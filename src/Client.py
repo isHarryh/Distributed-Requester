@@ -1,19 +1,153 @@
-from typing import Optional, Union, List
+from typing import Optional, Union, List, Dict, Callable
 import asyncio
 import time
 import uuid
-from collections import deque
+import random
+from collections import deque, defaultdict
 from datetime import datetime, timezone
 from threading import Lock
 
 import httpx
 
-from src.Config import TaskConfig, Config
+from src.Config import TaskConfig, Config, RuleConfig, ConsecutiveStatusRuleConfig
 from src.Request import RequestWorker, RateLimiter
 from src.utils.StringFormatter import format_delta_time
 from src.utils.ResponseStatus import HttpStatus, ResponseStatus
-from src.utils.CustomTransport import AsyncCustomHost, NameSolver
 from src.utils.Logger import Logger
+
+
+class ProxyPool:
+    """Thread-safe proxy pool for managing proxy rotation."""
+
+    def __init__(self, proxies: List[Optional[str]], proxy_order: str):
+        self._lock = Lock()
+        self._current_index = 0
+        self._proxies = proxies if proxies else [None]  # Default to direct connection
+        self._order = proxy_order
+
+        Logger.info(f"ProxyPool initialized with {len(self._proxies)} proxies ({proxy_order})")
+
+    def get_proxy(self) -> Optional[str]:
+        with self._lock:
+            if self._order == "random":
+                return random.choice(self._proxies)
+            elif self._order == "sequential":
+                proxy = self._proxies[self._current_index]
+                self._current_index = (self._current_index + 1) % len(self._proxies)
+                return proxy
+            elif self._order == "switchByRule":
+                return self._proxies[self._current_index]
+            else:
+                return random.choice(self._proxies)
+
+    def switch_to_next(self) -> Optional[str]:
+        with self._lock:
+            self._current_index = (self._current_index + 1) % len(self._proxies)
+            proxy = self._proxies[self._current_index]
+            Logger.info(f"Switched to next proxy: {proxy or 'direct connection'}")
+            return proxy
+
+    def switch_to_prev(self) -> Optional[str]:
+        with self._lock:
+            self._current_index = (self._current_index - 1) % len(self._proxies)
+            proxy = self._proxies[self._current_index]
+            Logger.info(f"Switched to previous proxy: {proxy or 'direct connection'}")
+            return proxy
+
+    def switch_to_random(self) -> Optional[str]:
+        with self._lock:
+            new_index = random.randint(0, len(self._proxies) - 1)
+            self._current_index = new_index
+            proxy = self._proxies[self._current_index]
+            Logger.info(f"Switched to random proxy: {proxy or 'direct connection'}")
+            return proxy
+
+    def get_current_proxy(self) -> Optional[str]:
+        with self._lock:
+            return self._proxies[self._current_index]
+
+    def get_proxy_count(self) -> int:
+        return len(self._proxies)
+
+
+class RuleExecutor:
+    """Execute rules based on response status and other conditions."""
+
+    def __init__(self, rules: List[RuleConfig], proxy_pool: ProxyPool):
+        self.rules = rules
+        self.proxy_pool = proxy_pool
+        self._lock = Lock()
+
+        # Track consecutive status counts per rule
+        self._consecutive_counts: Dict[str, int] = defaultdict(int)
+        self._last_status_per_rule: Dict[str, str] = {}
+
+        Logger.info(f"RuleExecutor initialized with {len(rules)} rules")
+
+    def process(self, status: ResponseStatus) -> Optional[str]:
+        if not self.rules:
+            return None
+
+        with self._lock:
+            status_str = status.value
+
+            for i, rule in enumerate(self.rules):
+                rule_id = f"rule_{i}"
+
+                if isinstance(rule, ConsecutiveStatusRuleConfig):
+                    # Check if this is one of the consecutive statuses we're tracking
+                    if status_str in rule.status:
+                        # Same status as last time, increment counter
+                        if self._last_status_per_rule.get(rule_id) == status_str:
+                            self._consecutive_counts[rule_id] += 1
+                        else:
+                            # Different status, reset counter
+                            self._consecutive_counts[rule_id] = 1
+                    else:
+                        # Different status, reset counter
+                        self._consecutive_counts[rule_id] = 0
+
+                    self._last_status_per_rule[rule_id] = status_str
+
+                    # Check if rule condition is met
+                    if status_str in rule.status and self._consecutive_counts[rule_id] >= rule.count:
+                        # Execute the action and reset counter after rule execution
+                        Logger.warning(f"Rule triggered: {rule.event}, {rule.status} x{rule.count}")
+                        action_result = self._execute_action(rule.action)
+                        self._consecutive_counts[rule_id] = 0
+                        return action_result
+
+            return None
+
+    def _execute_action(self, action: str) -> str:
+        try:
+            if action == "switchToNextProxy":
+                self.proxy_pool.switch_to_next()
+                return "proxy_switched"
+            elif action == "switchToPrevProxy":
+                self.proxy_pool.switch_to_prev()
+                return "proxy_switched"
+            elif action == "switchToRandomProxy":
+                self.proxy_pool.switch_to_random()
+                return "proxy_switched"
+            elif action == "stopCurrentTask":
+                Logger.warning("Rule action: Stopping current task")
+                return "stop_task"
+            elif action == "stopProgram":
+                Logger.warning("Rule action: Stopping program")
+                return "stop_program"
+            else:
+                Logger.error(f"Unknown action: {action}")
+                return "unknown_action"
+        except Exception as e:
+            Logger.error(f"Error executing action {action}: {e}")
+            return "action_error"
+
+    def reset_counters(self):
+        with self._lock:
+            self._consecutive_counts.clear()
+            self._last_status_per_rule.clear()
+            Logger.info("Rule counters reset")
 
 
 class OverallStats:
@@ -40,6 +174,13 @@ class OverallStats:
         # Status type statistics
         self.status_counts = {status: 0 for status in ResponseStatus}
 
+        # Callback for rule processing
+        self.rule_callback: Optional[Callable[[ResponseStatus], Optional[str]]] = None
+
+    def set_rule_callback(self, callback: Callable[[ResponseStatus], Optional[str]]):
+        """Set callback function for rule processing"""
+        self.rule_callback = callback
+
     @staticmethod
     def _estimate_request_size(response: httpx.Response) -> int:
         request = response.request
@@ -62,7 +203,7 @@ class OverallStats:
 
                 http_status = HttpStatus.of(response)
                 Logger.debug(
-                    f"{request.method} {response_status.name} {http_status} {request.url} "
+                    f"{request.method} {response_status.name} {http_status.value} {request.url} "
                     + f"in {response_time*1000:.0f}ms, "
                     + f"preview: `{response.content[:64] if len(response.content) > 64 else response.content}` "
                     + f"(full {len(response.content)}B)"
@@ -100,6 +241,13 @@ class OverallStats:
             current_second = self.second_stats[-1][1]
             current_second["status_times"][response_status].append(response_time)
             current_second["bytes_down"] += bytes_down
+
+            # Process rules if callback is set
+            if self.rule_callback:
+                try:
+                    self.rule_callback(response_status)
+                except Exception as e:
+                    Logger.error(f"Error in rule callback: {e}")
 
     def get_avg_response_ms(self) -> float:
         with self._lock:
@@ -248,11 +396,11 @@ class OverallStats:
         # Print detailed status breakdown - only header border
         sorted_stats = self.get_partial_sorted_stats()
         if sorted_stats:
-            content += "| %-15s | %5s | %7s | %8s |\n" % ("Status", "Count", "%", "Latency")
+            content += "| %-15s | %5s | %5s | %8s |\n" % ("Status", "Count", "%", "Latency")
             content += "+" + "-" * 17 + "+" + "-" * 7 + "+" + "-" * 8 + "+" + "-" * 11 + "+\n"
 
             for status_name, count, percentage, latency in sorted_stats:
-                content += "| %-15s | %5d | %6.1f%% | %6.0fms |\n" % (status_name, count, percentage, latency)
+                content += "| %-15s | %5d | %5.1f%% | %6.0fms |\n" % (status_name, count, percentage, latency)
 
         print(content, end="", flush=True)
 
@@ -300,6 +448,12 @@ class Client:
         self.last_report_time = time.time()
         self.client_id = str(uuid.uuid4())
 
+        # Initialize proxy pool
+        self.proxy_pool = ProxyPool(proxies=task_config.proxies, proxy_order=task_config.policy.proxy_order)
+
+        # Initialize rule executor
+        self.rule_executor = RuleExecutor(rules=task_config.rules, proxy_pool=self.proxy_pool)
+
         if server_config and server_config.client:
             self.report_interval = server_config.client.report.live_report_interval
             self.server_url = server_config.client.server_url
@@ -311,7 +465,27 @@ class Client:
         self.last_reported_status_counts = {status: 0 for status in ResponseStatus}
         self.last_reported_bytes_down = 0
 
+        # Control flags for rule actions
+        self._stop_task_requested = False
+        self._stop_program_requested = False
+
+        # Set up rule processing callback
+        self.stats.set_rule_callback(self._process_rule_response)
+
         Logger.info(f"Client initialized with ID {self.client_id} (report interval {self.report_interval}s)")
+        Logger.info(f"Proxy pool: {self.proxy_pool.get_proxy_count()} proxies, Rules: {len(task_config.rules)}")
+
+    def _process_rule_response(self, status: ResponseStatus) -> Optional[str]:
+        """Process response status through rule executor"""
+        action = self.rule_executor.process(status)
+        if action:
+            if action == "stop_task":
+                self._stop_task_requested = True
+            elif action == "stop_program":
+                self._stop_program_requested = True
+            elif action == "proxy_switched":
+                pass
+        return action
 
     async def _report_to_server(self):
         """Report incremental statistics to server"""
@@ -391,62 +565,54 @@ class Client:
         Logger.info(f"End Time: {end_time.isoformat() if end_time else 'No end time set'}")
         Logger.info("-" * 80)
 
-    def _create_httpx_client(self, limits_config: httpx.Limits, timeout_config: httpx.Timeout) -> httpx.AsyncClient:
-        """Create httpx.AsyncClient with custom transport if needed"""
-        # Check if custom host resolution is needed
-        if self.task_config.prefabs.override_hosts:
-            name_solver = NameSolver(self.task_config.prefabs.override_hosts)
-            transport = AsyncCustomHost(name_solver)
-            return httpx.AsyncClient(
-                limits=limits_config, timeout=timeout_config, follow_redirects=True, transport=transport
-            )
-        else:
-            return httpx.AsyncClient(limits=limits_config, timeout=timeout_config, follow_redirects=True)
-
     async def _run_with_shared_client(
         self,
-        concurrent_connections: int,
-        timeout_config: httpx.Timeout,
         rate_limiter: Optional[RateLimiter],
         end_time: Optional[datetime],
     ):
-        limits_config = httpx.Limits(max_keepalive_connections=concurrent_connections)
-
-        shared_client = self._create_httpx_client(limits_config, timeout_config)
-        try:
-            await self._run_client_loop([shared_client] * concurrent_connections, rate_limiter, end_time)
-        finally:
-            await shared_client.aclose()
+        # With new worker design, shared vs independent is handled by reuse_connections policy
+        await self._run_client_loop(rate_limiter, end_time)
 
     async def _run_with_independent_clients(
         self,
-        concurrent_connections: int,
-        timeout_config: httpx.Timeout,
         rate_limiter: Optional[RateLimiter],
         end_time: Optional[datetime],
     ):
-        limits_config = httpx.Limits(max_keepalive_connections=1)
-
-        clients = []
-        try:
-            clients = [self._create_httpx_client(limits_config, timeout_config) for _ in range(concurrent_connections)]
-            await self._run_client_loop(clients, rate_limiter, end_time)
-        finally:
-            for client in clients:
-                await client.aclose()
+        # With new worker design, shared vs independent is handled by reuse_connections policy
+        await self._run_client_loop(rate_limiter, end_time)
 
     async def _run_client_loop(
         self,
-        sessions: List[httpx.AsyncClient],
         rate_limiter: Optional[RateLimiter],
         end_time: Optional[datetime],
     ):
         stop_event = asyncio.Event()
 
-        # Create worker instances
-        workers = [
-            RequestWorker(self.task_config, session, rate_limiter, self.stats.add_result) for session in sessions
-        ]
+        max_connections = self.task_config.policy.limits.coroutines
+
+        # Prepare HTTP client configuration
+        limits_config = httpx.Limits(
+            max_keepalive_connections=(max_connections if self.task_config.policy.reuse_connections else 1)
+        )
+        timeout_config = httpx.Timeout(
+            connect=self.task_config.policy.timeouts.connect,
+            read=self.task_config.policy.timeouts.read,
+            write=self.task_config.policy.timeouts.write,
+            pool=5.0,
+        )
+
+        # Create worker instances with proxy provider
+        workers = []
+        for _ in range(max_connections):
+            worker = RequestWorker(
+                task_config=self.task_config,
+                rate_limiter=rate_limiter,
+                response_callback=self.stats.add_result,
+                proxy_provider=self.proxy_pool.get_proxy,
+                limits_config=limits_config,
+                timeout_config=timeout_config,
+            )
+            workers.append(worker)
 
         # Start all workers
         for worker in workers:
@@ -463,6 +629,14 @@ class Client:
 
                 # Run client main loop
                 while end_time is None or datetime.now().astimezone() < end_time:
+                    # Check for rule-based stop conditions
+                    if self._stop_task_requested:
+                        Logger.warning("Task stopped by rule")
+                        break
+                    if self._stop_program_requested:
+                        Logger.warning("Program stopped by rule")
+                        raise KeyboardInterrupt("Program stopped by rule")
+
                     self.stats.print_live_stats()
                     await asyncio.sleep(0.5)
             finally:
@@ -497,17 +671,7 @@ class Client:
 
         # Extract configuration
         limits = self.task_config.policy.limits
-        timeouts = self.task_config.policy.timeouts
         end_time = self.task_config.policy.schedule.get_end_time()
-        concurrent_connections = limits.coroutines
-
-        # Configure timeout
-        timeout_config = httpx.Timeout(
-            connect=timeouts.connect,
-            read=timeouts.read,
-            write=timeouts.write,
-            pool=5,
-        )
 
         # Create rate limiter
         rate_limiter = None
@@ -516,9 +680,9 @@ class Client:
 
         try:
             if self.task_config.policy.reuse_connections:
-                await self._run_with_shared_client(concurrent_connections, timeout_config, rate_limiter, end_time)
+                await self._run_with_shared_client(rate_limiter, end_time)
             else:
-                await self._run_with_independent_clients(concurrent_connections, timeout_config, rate_limiter, end_time)
+                await self._run_with_independent_clients(rate_limiter, end_time)
 
         except Exception as e:
             Logger.error(f"Error in client: {type(e).__name__} {e}")

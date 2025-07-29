@@ -78,9 +78,21 @@ The `tasks` list contains some task objects whose schema is as follows:
       "data": "key1=data1&key2=data2" // can also be object
     }
   ],
+  "rules": [ // optional
+    {
+      "event": "onConsecutiveStatus", // required, currently only "onConsecutiveStatus" is supported
+      "action": "stopCurrentTask", // required, can be "switchToNextProxy", "switchToPrevProxy", "switchToRandomProxy", "stopCurrentTask", "stopProgram"
+      // the following fields are required if event is "onConsecutiveStatus"
+      "status": [ // required, see ResponseStatus enum class for details
+        "Connect Timeout"
+      ], 
+      "count": 20 // required, the number of consecutive occurrences
+    }
+  ],
   "policy": { // optional (children are also optional)
     "reuse_connections": true, // default to true
     "order": "random", // default to "random", currently only "random" is supported
+    "proxy_order": "switchByRule", // default to "random", can be "random", "sequential", "switchByRule"
     "schedule": {
       "start": "2025-01-01T08:00+08:00", // or number (offset from now), omitted/null/0 means start immediately
       "end": "2025-01-01T09:00+08:00" // or number (offset from now), omitted/null/0 means no end
@@ -104,7 +116,12 @@ The `tasks` list contains some task objects whose schema is as follows:
       "Accept-Encoding": "gzip, deflate, br, zstd",
       "Accept-Language": "en"
     }
-  }
+  },
+  "proxies": [ // optional, the proxy pool
+    "sock5://1.2.3.4:1080", // a single proxy URL
+    "http://1.2.3.4:1080",
+    null // null means a direct connection (no proxy)
+  ]
 }
 ```
 

@@ -1,8 +1,10 @@
-from typing import Optional, Dict, Any, Union, List
+from typing import Optional, Dict, Any, Union, List, Annotated, Literal
 
 import json
 from datetime import datetime, timezone, timedelta
-from pydantic import BaseModel, Field, field_validator
+
+import httpx
+from pydantic import BaseModel, Field, field_validator, Tag
 
 
 VERSION = "0.4"
@@ -46,12 +48,16 @@ class TimeoutsConfig(BaseModel):
     read: float = 10.0
     write: float = 10.0
 
+    def to_timeout(self) -> httpx.Timeout:
+        return httpx.Timeout(connect=self.connect, read=self.read, write=self.write, pool=None)
+
 
 class PolicyConfig(BaseModel):
     """Policy configuration"""
 
     reuse_connections: bool = True
     order: str = "random"
+    proxy_order: str = "random"
     schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)
     limits: LimitsConfig = Field(default_factory=LimitsConfig)
     timeouts: TimeoutsConfig = Field(default_factory=TimeoutsConfig)
@@ -62,6 +68,69 @@ class PolicyConfig(BaseModel):
         if v not in ["random"]:
             raise ConfigError(f"Invalid order '{v}', only 'random' is supported")
         return v
+
+    @field_validator("proxy_order")
+    @classmethod
+    def validate_proxy_order(cls, v):
+        if v not in ["random", "sequential", "switchByRule"]:
+            raise ConfigError(f"Invalid proxy_order '{v}', supported: 'random', 'sequential', 'switchByRule'")
+        return v
+
+
+class RuleConfigBase(BaseModel):
+    """Base class for rule configurations"""
+
+    event: str
+    action: str
+
+    @field_validator("event")
+    @classmethod
+    def validate_event(cls, v):
+        if v not in ["onConsecutiveStatus"]:
+            raise ConfigError(f"Invalid event '{v}', only 'onConsecutiveStatus' is supported")
+        return v
+
+    @field_validator("action")
+    @classmethod
+    def validate_action(cls, v):
+        valid_actions = [
+            "switchToNextProxy",
+            "switchToPrevProxy",
+            "switchToRandomProxy",
+            "stopCurrentTask",
+            "stopProgram",
+        ]
+        if v not in valid_actions:
+            raise ConfigError(f"Invalid action '{v}', supported: {valid_actions}")
+        return v
+
+
+class ConsecutiveStatusRuleConfig(RuleConfigBase):
+    """Rule configuration for consecutive status events"""
+
+    event: Literal["onConsecutiveStatus"] = "onConsecutiveStatus"
+    status: List[str]  # Changed from str to List[str] to support multiple status conditions
+    count: int
+
+    @field_validator("count")
+    @classmethod
+    def validate_count(cls, v):
+        if v <= 0:
+            raise ConfigError("Count must be positive")
+        return v
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, v):
+        if not v or len(v) == 0:
+            raise ConfigError("Status list cannot be empty")
+        # Note: Actual status validation should be done against ResponseStatus enum
+        return v
+
+
+RuleConfig = Annotated[
+    Union[Annotated[ConsecutiveStatusRuleConfig, Tag("onConsecutiveStatus")]], Field(discriminator="event")
+]
 
 
 class PrefabsConfig(BaseModel):
@@ -97,14 +166,26 @@ class TaskConfig(BaseModel):
 
     name: str
     requests: List[RequestConfig]
+    rules: List[RuleConfig] = Field(default_factory=list)
     policy: PolicyConfig = Field(default_factory=PolicyConfig)
     prefabs: PrefabsConfig = Field(default_factory=PrefabsConfig)
+    proxies: List[Optional[str]] = Field(default_factory=list)
 
     @field_validator("requests")
     @classmethod
     def validate_requests(cls, v):
         if not v or len(v) == 0:
             raise ConfigError("requests field is required and cannot be empty")
+        return v
+
+    @field_validator("proxies")
+    @classmethod
+    def validate_proxies(cls, v):
+        for proxy in v:
+            if proxy is not None and not isinstance(proxy, str):
+                raise ConfigError("Proxy must be a string or null")
+            if proxy is not None and not (proxy.startswith(("http://", "https://", "socks5://", "socks4://"))):
+                raise ConfigError("Proxy URL must start with http://, https://, socks4://, or socks5://")
         return v
 
 

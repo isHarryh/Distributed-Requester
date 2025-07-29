@@ -8,6 +8,7 @@ import time
 import httpx
 
 from src.Config import TaskConfig, RequestConfig
+from src.utils.CustomTransport import AsyncCustomHost, NameSolver
 
 
 class RequestState(Enum):
@@ -41,18 +42,66 @@ class RequestWorker:
     def __init__(
         self,
         task_config: TaskConfig,
-        session: httpx.AsyncClient,
         rate_limiter: Optional[RateLimiter] = None,
         response_callback: Optional[Callable[[httpx.Request, Union[httpx.Response, Exception], float], None]] = None,
+        proxy_provider: Optional[Callable[[], Optional[str]]] = None,
+        limits_config: Optional[httpx.Limits] = None,
+        timeout_config: Optional[httpx.Timeout] = None,
     ):
         self.task_config = task_config
-        self.session = session
         self.rate_limiter = rate_limiter
         self.response_callback = response_callback
+        self.proxy_provider = proxy_provider  # Function to get current proxy
 
+        # HTTP client configuration
+        self.limits_config = limits_config or httpx.Limits(max_keepalive_connections=1)
+        self.timeout_config = timeout_config or httpx.Timeout(connect=5.0, read=10.0, write=10.0, pool=5.0)
+
+        # Client management
+        self._current_proxy: Optional[str] = None
+        self._session: Optional[httpx.AsyncClient] = None
+
+        # Task management
         self._task: Optional[asyncio.Task] = None
         self._state = RequestState.WAITING
         self._stop_event = asyncio.Event()
+
+    async def _ensure_client(self):
+        """Ensure we have a valid HTTP client for the current proxy"""
+        current_proxy = self.proxy_provider() if self.proxy_provider else None
+
+        # Check if we need to recreate the client
+        need_new_client = (
+            self._session is None
+            or self._session.is_closed
+            or (not self.task_config.policy.reuse_connections)
+            or (current_proxy != self._current_proxy)
+        )
+
+        if need_new_client:
+            # Close existing client if any
+            if self._session and not self._session.is_closed:
+                await self._session.aclose()
+
+            limits = self.limits_config
+            timeout = self.timeout_config
+            follow_redirects = True
+            proxy = current_proxy if current_proxy else None
+            transport = None
+
+            # Check if custom host resolution is needed
+            if self.task_config.prefabs.override_hosts:
+                name_solver = NameSolver(self.task_config.prefabs.override_hosts)
+                transport = AsyncCustomHost(name_solver)
+
+            self._session = httpx.AsyncClient(
+                limits=limits,
+                timeout=timeout,
+                follow_redirects=follow_redirects,
+                transport=transport,
+                proxy=proxy,
+            )
+            self._current_proxy = current_proxy
 
     def get_state(self) -> RequestState:
         """Get current worker state"""
@@ -107,16 +156,20 @@ class RequestWorker:
         merged_headers.update(self.task_config.prefabs.default_headers)
         merged_headers.update(request_config.headers)
 
+        # Ensure we have a valid client for current proxy
+        await self._ensure_client()
+        assert self._session is not None
+
         if post_data is not None:
-            request = self.session.build_request("POST", request_config.url, content=post_data, headers=merged_headers)
+            request = self._session.build_request("POST", request_config.url, content=post_data, headers=merged_headers)
         else:
-            request = self.session.build_request("GET", request_config.url, headers=merged_headers)
+            request = self._session.build_request("GET", request_config.url, headers=merged_headers)
 
         start_time = time.time()
 
         try:
             self._state = RequestState.WORKING
-            response = await self.session.send(request)
+            response = await self._session.send(request)
         except Exception as e:
             response = e
         finally:
@@ -145,6 +198,11 @@ class RequestWorker:
                     break
 
         finally:
+            # Clean up HTTP client
+            if self._session and not self._session.is_closed:
+                await self._session.aclose()
+                self._session = None
+
             self._state = RequestState.STOPPED
 
     def start(self):
@@ -173,6 +231,12 @@ class RequestWorker:
                     pass
             except asyncio.CancelledError:
                 pass
+
+        # Clean up HTTP client
+        if self._session and not self._session.is_closed:
+            await self._session.aclose()
+            self._session = None
+
         self._state = RequestState.STOPPED
 
     def __del__(self):

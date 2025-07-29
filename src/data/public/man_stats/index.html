@@ -604,8 +604,10 @@
             async fetchStats() {
                 try {
                     // Clear change indicators before fetching new data
-                    this.clearChangeIndicators();
+                    $('.status-change').removeClass('show positive negative');
+                    $('#bytesChange').removeClass('show positive negative');
 
+                    // Fetch data from the server
                     const response = await $.get('/get_stats');
 
                     if (response.code === 0) {
@@ -613,10 +615,11 @@
                         this.updateLastUpdated();
                         this.clearError();
                     } else {
-                        this.showError(`Server error: ${response.msg}`);
+                        this.showError(`Server error: ${response.code} ${response.msg}`);
                     }
                 } catch (error) {
-                    this.showError(`Failed to fetch stats: ${error.message}`);
+                    this.showError("Failed to fetch stats");
+                    console.error(error);
                 }
             }
 
@@ -642,59 +645,48 @@
                     const previousCount = this.previousStats ? (this.previousStats[status] || 0) : 0;
                     const change = count - previousCount;
                     const statusId = `status-row-${status.replace(/\s+/g, '-')}`;
+                    const changeId = `change-${status.replace(/\s+/g, '-')}`;
+
+                    // Ensure status row
                     let $row = $(`#${statusId}`);
                     if ($row.length === 0) {
-                        // First render
-                        $row = this.createStatusRow(status, count, percentage, change, statusId);
-                        $statusContainer.append($row);
-                    } else {
-                        $row.find('.status-count').text(count);
-                        $row.find('.status-percent').text(`${percentage.toFixed(1)}%`);
-                        $row.find('.status-bar-fill').css('width', `${percentage}%`);
+                        $row = $(
+                            `<div class="status-row" id="${statusId}">
+                                <div class="status-info">
+                                    <div class="status-text">${status}</div>
+                                    <div class="status-count">--</div>
+                                    <div class="status-change" id="${changeId}">--</div>
+                                    <div class="status-percent">--%</div>
+                                </div>
+                                <div class="status-bar-container">
+                                    <div class="status-bar-fill ${this.getStatusClass(status)}"></div>
+                                </div>
+                            </div>`
+                        );
+                    }
+                    $statusContainer.append($row);
 
-                        const $change = $row.find('.status-change');
-                        $change.text((change > 0 ? '+' : '') + change);
-                        if (change !== 0) {
-                            setTimeout(() => {
-                                $change.addClass('show').addClass(change > 0 ? 'positive' : 'negative');
-                            }, 100);
-                        }
-                        $statusContainer.append($row);
+                    // Update status row content
+                    $row.find('.status-count').text(count);
+                    $row.find('.status-percent').text(`${percentage.toFixed(1)}%`);
+                    $row.find('.status-bar-fill').css('width', `${percentage}%`);
+
+                    // Update change indicator
+                    const $change = $row.find('.status-change');
+                    $change.text((change > 0 ? '+' : '') + change);
+                    if (change !== 0) {
+                        setTimeout(() => {
+                            $change.addClass('show');
+                            $change.addClass(change > 0 ? 'positive' : 'negative');
+                        }, 100);
                     }
                 });
 
                 this.previousStats = { ...stats };
             }
-            createStatusRow(status, count, percentage, change, statusId) {
-                const statusClass = this.getStatusClass(status);
-                const percentageText = `${percentage.toFixed(1)}%`;
-                const changeId = `change-${status.replace(/\s+/g, '-')}`;
-                const $container = $(
-                    `<div class="status-row" id="${statusId}">
-                        <div class="status-info">
-                            <div class="status-text">${status}</div>
-                            <div class="status-count">${count}</div>
-                            <div class="status-change" id="${changeId}">
-                                ${change > 0 ? '+' : ''}${change}
-                            </div>
-                            <div class="status-percent">${percentageText}</div>
-                        </div>
-                        <div class="status-bar-container">
-                            <div class="status-bar-fill ${statusClass}" style="width: ${percentage}%"></div>
-                        </div>
-                    </div>`
-                );
-                if (change !== 0) {
-                    setTimeout(() => {
-                        const $changeEl = $container.find('.status-change');
-                        $changeEl.addClass('show').addClass(change > 0 ? 'positive' : 'negative');
-                    }, 100);
-                }
-                return $container;
-            }
 
             getStatusClass(status) {
-                // Map status strings to CSS classes based on ResponseStatus enum
+                // Status text -> CSS class
                 const statusMap = {
                     'Information': 'status-information',
                     'Success': 'status-success',
@@ -713,18 +705,9 @@
                     'Unknown': 'status-unknown'
                 };
 
-                // Direct mapping
                 if (statusMap[status]) {
                     return statusMap[status];
                 }
-
-                // Fallback for HTTP status codes
-                if (status.match(/^1\d\d$/)) return 'status-information';
-                if (status.match(/^2\d\d$/)) return 'status-success';
-                if (status.match(/^3\d\d$/)) return 'status-redirected';
-                if (status.match(/^[45]\d\d$/)) return 'status-http-error';
-
-                // Default for unknown statuses
                 return 'status-unknown';
             }
 
@@ -864,11 +847,6 @@
                     `);
                     $container.append($circle);
                 }
-            }
-
-            clearChangeIndicators() {
-                $('.status-change').removeClass('show positive negative');
-                $('#bytesChange').removeClass('show positive negative');
             }
 
             updateLastUpdated() {

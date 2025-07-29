@@ -414,7 +414,6 @@ class OverallStats:
     def print_final_stats(self):
         elapsed_time = time.time() - self.start_time
 
-        Logger.info("\n" + "=" * 50)
         Logger.info("Final Statistics")
         Logger.info("=" * 50)
 
@@ -527,8 +526,11 @@ class Client:
                 response.raise_for_status()
 
             self.last_report_time = current_time
+            Logger.info("Reported to server successfully")
+        except httpx.HTTPStatusError as e:
+            Logger.warning(f"Failed to report to server, response code {e.response.status_code}: {e.response.text}")
         except Exception as e:
-            Logger.warning(f"Failed to report to server: {e}")
+            Logger.warning(f"Failed to report to server: {type(e)} - {e}")
 
     async def _report_worker(self, stop_event: asyncio.Event):
         """Background worker for periodic server reporting"""

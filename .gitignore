@@ -3,4 +3,7 @@ build
 dist
 logs
 temp
+
 *.spec
+*config*.json
+!*config-sample*.json

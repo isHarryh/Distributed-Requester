@@ -4,15 +4,16 @@ import json
 import os
 import random
 import time
-from collections import defaultdict, deque
+from collections import defaultdict
 from threading import Lock
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from src.Config import ReportConfig, load_config
+from src.Config import load_config
 from src.utils.Logger import Logger
 
 
@@ -86,8 +87,11 @@ class Server:
 
         self.server_config = self.config.server
         self.app = FastAPI(
-            title="Distributed Requester Server", version=self.config.version, default_response_class=PrettyJSONResponse
+            title="Distributed Requester Server",
+            version=self.config.version,
+            default_response_class=PrettyJSONResponse,
         )
+        self.app.add_middleware(GZipMiddleware, compresslevel=1)
 
         self._stats_lock = Lock()
         self._config_lock = Lock()
@@ -95,7 +99,6 @@ class Server:
 
         self.total_stats: Dict[str, int] = defaultdict(int)
         self.total_bytes_down = 0
-        self.client_reports: deque = deque()
         self.client_records: Dict[str, ClientRecord] = {}
 
         self._setup_routes()
@@ -176,23 +179,11 @@ class Server:
                     self.client_records[request.client_id] = ClientRecord(request.client_id, request.client_ttl)
 
             with self._stats_lock:
-                self.client_reports.append(report)
-
                 # Aggregate stats
                 for status, count in request.stats.items():
                     self.total_stats[status] += count
 
                 self.total_bytes_down += request.bytes_down
-
-                # Clean old reports
-                interval = (
-                    self.config.client.report.live_report_interval
-                    if self.config.client and self.config.client.report
-                    else ReportConfig().live_report_interval
-                )
-                current_time = time.time()
-                while self.client_reports and current_time - self.client_reports[0].timestamp > interval * 2:
-                    self.client_reports.popleft()
 
             return StandardResponse(code=0, msg="success", data=None)
 
@@ -204,7 +195,7 @@ class Server:
 
             with self._stats_lock:
                 stats_data = {
-                    "stats": dict(self.total_stats),
+                    "stats": dict(sorted(self.total_stats.items(), key=lambda x: x[1], reverse=True)),
                     "bytes_down": self.total_bytes_down,
                     "active_clients": len(self.client_records),
                 }

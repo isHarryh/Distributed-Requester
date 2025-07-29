@@ -18,6 +18,7 @@ class ResponseStatus(Enum):
     POOL_TIMEOUT = "Pool Timeout"
 
     NETWORK_ERROR = "Network Error"
+    PROTOCOL_ERROR = "Protocol Error"
     TOO_MANY_REDIRECTS = "Too Many Redirects"
     UNCAUGHT_EXCEPTION = "Uncaught Exception"
     UNKNOWN = "Unknown"
@@ -42,6 +43,8 @@ class ResponseStatus(Enum):
             return ResponseStatus.POOL_TIMEOUT
         elif isinstance(response, httpx.NetworkError):
             return ResponseStatus.NETWORK_ERROR
+        elif isinstance(response, httpx.ProtocolError):
+            return ResponseStatus.PROTOCOL_ERROR
         elif isinstance(response, httpx.TooManyRedirects):
             return ResponseStatus.TOO_MANY_REDIRECTS
         elif isinstance(response, Exception):

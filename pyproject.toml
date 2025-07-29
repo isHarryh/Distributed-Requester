@@ -9,7 +9,7 @@ license = "MIT"
 readme = "README.md"
 requires-python = ">=3.9,<3.13"
 dependencies = [
-    "httpx (~=0.28)",
+    "httpx[socks] (~=0.28)",
     "fastapi[standard] (~=0.116)",
     "loguru (~=0.7)"
 ]

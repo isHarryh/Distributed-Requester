@@ -152,7 +152,7 @@ class RuleExecutor:
 
 class OverallStats:
 
-    def __init__(self, partial_span: int = 60):
+    def __init__(self, partial_span: int = 60, proxy_pool: Optional[ProxyPool] = None):
         self._lock = Lock()
 
         # Overall statistics
@@ -170,6 +170,9 @@ class OverallStats:
         # Per-second statistics: deque of (timestamp, {status: [response_times], bytes_down: int})
         self.partial_span = partial_span
         self.second_stats = deque(maxlen=partial_span)
+
+        # Proxy pool
+        self.proxy_pool = proxy_pool
 
         # Status type statistics
         self.status_counts = {status: 0 for status in ResponseStatus}
@@ -376,6 +379,10 @@ class OverallStats:
 
         content = "\033[2J\033[H"
 
+        if self.proxy_pool:
+            proxy = self.proxy_pool.get_current_proxy()
+            content += "> Using proxy %s\n\n" % proxy if proxy else "> Using direct connection\n\n"
+
         content += "| %-15s | %6s | %7s | %7s |\n" % ("Period", "Total", "Success", "Failure")
         content += "+" + "-" * 17 + "+" + "-" * 8 + "+" + "-" * 9 + "+" + "-" * 9 + "+\n"
         content += "| %-15s | %6d | %7d | %7d |\n" % (
@@ -396,13 +403,13 @@ class OverallStats:
         # Print detailed status breakdown - only header border
         sorted_stats = self.get_partial_sorted_stats()
         if sorted_stats:
-            content += "| %-15s | %5s | %5s | %8s |\n" % ("Status", "Count", "%", "Latency")
-            content += "+" + "-" * 17 + "+" + "-" * 7 + "+" + "-" * 8 + "+" + "-" * 11 + "+\n"
+            content += "| %-18s | %5s | %6s | %8s |\n" % ("Status", "Count", "%", "Latency")
+            content += "+" + "-" * 20 + "+" + "-" * 7 + "+" + "-" * 8 + "+" + "-" * 10 + "+\n"
 
             for status_name, count, percentage, latency in sorted_stats:
-                content += "| %-15s | %5d | %5.1f%% | %6.0fms |\n" % (status_name, count, percentage, latency)
+                content += "| %-18s | %5d | %5.1f%% | %6.0fms |\n" % (status_name, count, percentage, latency)
 
-        print(content, end="", flush=True)
+        print(content + "\n", end="", flush=True)
 
     def print_final_stats(self):
         elapsed_time = time.time() - self.start_time
@@ -443,13 +450,11 @@ class Client:
 
     def __init__(self, task_config: TaskConfig, server_config: Optional[Config] = None, partial_span: int = 60):
         self.task_config = task_config
-        self.stats = OverallStats(partial_span=partial_span)
         self.server_config = server_config
+        self.proxy_pool = ProxyPool(proxies=task_config.proxies, proxy_order=task_config.policy.proxy_order)
+        self.stats = OverallStats(partial_span=partial_span, proxy_pool=self.proxy_pool)
         self.last_report_time = time.time()
         self.client_id = str(uuid.uuid4())
-
-        # Initialize proxy pool
-        self.proxy_pool = ProxyPool(proxies=task_config.proxies, proxy_order=task_config.policy.proxy_order)
 
         # Initialize rule executor
         self.rule_executor = RuleExecutor(rules=task_config.rules, proxy_pool=self.proxy_pool)

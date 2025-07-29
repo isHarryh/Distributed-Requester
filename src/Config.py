@@ -222,7 +222,7 @@ def parse_datetime(value: Union[str, int, float]) -> datetime:
     """Parse datetime string or numeric offset"""
     if isinstance(value, (int, float)):
         # Number represents seconds offset from now
-        return datetime.now(timezone.utc) + timedelta(seconds=value)
+        return (datetime.now(timezone.utc) + timedelta(seconds=value)).astimezone()
 
     if isinstance(value, str):
         try:

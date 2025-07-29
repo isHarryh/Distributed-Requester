@@ -1,4 +1,4 @@
-from enum import StrEnum
+from enum import Enum
 from typing import Callable, Optional, Union
 import asyncio
 import json
@@ -10,7 +10,7 @@ import httpx
 from src.Config import TaskConfig, RequestConfig
 
 
-class RequestState(StrEnum):
+class RequestState(Enum):
     """Request worker state."""
 
     WAITING = "Waiting"

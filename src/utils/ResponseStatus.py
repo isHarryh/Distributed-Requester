@@ -1,10 +1,10 @@
-from enum import IntEnum, StrEnum
+from enum import Enum
 from typing import Union
 
 import httpx
 
 
-class ResponseStatus(StrEnum):
+class ResponseStatus(Enum):
     """Response status categories."""
 
     INFORMATION = "Information"
@@ -57,7 +57,7 @@ class ResponseStatus(StrEnum):
         }
 
 
-class HttpStatus(IntEnum):
+class HttpStatus(Enum):
     """
     HTTP status codes.
 

@@ -9,7 +9,7 @@ from threading import Lock
 
 import httpx
 
-from src.Config import TaskConfig, Config, RuleConfig, ConsecutiveStatusRuleConfig
+from src.Config import TaskConfig, Config, ConsecutiveStatusRuleConfig
 from src.Request import RequestWorker, RateLimiter
 from src.utils.StringFormatter import format_delta_time
 from src.utils.ResponseStatus import HttpStatus, ResponseStatus
@@ -73,7 +73,7 @@ class ProxyPool:
 class RuleExecutor:
     """Execute rules based on response status and other conditions."""
 
-    def __init__(self, rules: List[RuleConfig], proxy_pool: ProxyPool):
+    def __init__(self, rules: List[ConsecutiveStatusRuleConfig], proxy_pool: ProxyPool):
         self.rules = rules
         self.proxy_pool = proxy_pool
         self._lock = Lock()
@@ -594,12 +594,7 @@ class Client:
         limits_config = httpx.Limits(
             max_keepalive_connections=(max_connections if self.task_config.policy.reuse_connections else 1)
         )
-        timeout_config = httpx.Timeout(
-            connect=self.task_config.policy.timeouts.connect,
-            read=self.task_config.policy.timeouts.read,
-            write=self.task_config.policy.timeouts.write,
-            pool=5.0,
-        )
+        timeout_config = self.task_config.policy.timeouts.build()
 
         # Create worker instances with proxy provider
         workers = []

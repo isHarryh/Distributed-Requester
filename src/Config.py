@@ -1,10 +1,10 @@
-from typing import Optional, Dict, Any, Union, List, Annotated, Literal
+from typing import Optional, Dict, Any, Union, List, Literal
 
 import json
 from datetime import datetime, timezone, timedelta
 
 import httpx
-from pydantic import BaseModel, Field, field_validator, Tag
+from pydantic import BaseModel, Field, field_validator
 
 
 VERSION = "0.4"
@@ -48,7 +48,7 @@ class TimeoutsConfig(BaseModel):
     read: float = 10.0
     write: float = 10.0
 
-    def to_timeout(self) -> httpx.Timeout:
+    def build(self) -> httpx.Timeout:
         return httpx.Timeout(connect=self.connect, read=self.read, write=self.write, pool=None)
 
 
@@ -56,60 +56,31 @@ class PolicyConfig(BaseModel):
     """Policy configuration"""
 
     reuse_connections: bool = True
-    order: str = "random"
-    proxy_order: str = "random"
+    order: Literal["random"] = "random"
+    proxy_order: Literal["random", "sequential", "switchByRule"] = "random"
     schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)
     limits: LimitsConfig = Field(default_factory=LimitsConfig)
     timeouts: TimeoutsConfig = Field(default_factory=TimeoutsConfig)
-
-    @field_validator("order")
-    @classmethod
-    def validate_order(cls, v):
-        if v not in ["random"]:
-            raise ConfigError(f"Invalid order '{v}', only 'random' is supported")
-        return v
-
-    @field_validator("proxy_order")
-    @classmethod
-    def validate_proxy_order(cls, v):
-        if v not in ["random", "sequential", "switchByRule"]:
-            raise ConfigError(f"Invalid proxy_order '{v}', supported: 'random', 'sequential', 'switchByRule'")
-        return v
 
 
 class RuleConfigBase(BaseModel):
     """Base class for rule configurations"""
 
-    event: str
-    action: str
-
-    @field_validator("event")
-    @classmethod
-    def validate_event(cls, v):
-        if v not in ["onConsecutiveStatus"]:
-            raise ConfigError(f"Invalid event '{v}', only 'onConsecutiveStatus' is supported")
-        return v
-
-    @field_validator("action")
-    @classmethod
-    def validate_action(cls, v):
-        valid_actions = [
-            "switchToNextProxy",
-            "switchToPrevProxy",
-            "switchToRandomProxy",
-            "stopCurrentTask",
-            "stopProgram",
-        ]
-        if v not in valid_actions:
-            raise ConfigError(f"Invalid action '{v}', supported: {valid_actions}")
-        return v
+    event: Literal["onConsecutiveStatus"]
+    action: Literal[
+        "switchToNextProxy",
+        "switchToPrevProxy",
+        "switchToRandomProxy",
+        "stopCurrentTask",
+        "stopProgram",
+    ]
 
 
 class ConsecutiveStatusRuleConfig(RuleConfigBase):
     """Rule configuration for consecutive status events"""
 
-    event: Literal["onConsecutiveStatus"] = "onConsecutiveStatus"
-    status: List[str]  # Changed from str to List[str] to support multiple status conditions
+    event: Literal["onConsecutiveStatus"]
+    status: List[str]
     count: int
 
     @field_validator("count")
@@ -126,11 +97,6 @@ class ConsecutiveStatusRuleConfig(RuleConfigBase):
             raise ConfigError("Status list cannot be empty")
         # Note: Actual status validation should be done against ResponseStatus enum
         return v
-
-
-RuleConfig = Annotated[
-    Union[Annotated[ConsecutiveStatusRuleConfig, Tag("onConsecutiveStatus")]], Field(discriminator="event")
-]
 
 
 class PrefabsConfig(BaseModel):
@@ -166,7 +132,7 @@ class TaskConfig(BaseModel):
 
     name: str
     requests: List[RequestConfig]
-    rules: List[RuleConfig] = Field(default_factory=list)
+    rules: List[ConsecutiveStatusRuleConfig] = Field(default_factory=list)
     policy: PolicyConfig = Field(default_factory=PolicyConfig)
     prefabs: PrefabsConfig = Field(default_factory=PrefabsConfig)
     proxies: List[Optional[str]] = Field(default_factory=list)
@@ -192,14 +158,7 @@ class TaskConfig(BaseModel):
 class DistributingConfig(BaseModel):
     """Distributing configuration for server"""
 
-    task_order: str = "random"
-
-    @field_validator("task_order")
-    @classmethod
-    def validate_task_order(cls, v):
-        if v not in ["random"]:
-            raise ConfigError(f"Invalid task_order '{v}', only 'random' is supported")
-        return v
+    task_order: Literal["random"] = "random"
 
 
 class ServerConfig(BaseModel):

@@ -93,13 +93,13 @@ The `tasks` list contains some task objects whose schema is as follows:
     "reuse_connections": true, // default to true
     "order": "random", // default to "random", currently only "random" is supported
     "proxy_order": "switchByRule", // default to "random", can be "random", "sequential", "switchByRule"
-    "schedule": {
-      "start": "2025-01-01T08:00+08:00", // or number (offset from now), omitted/null/0 means start immediately
-      "end": "2025-01-01T09:00+08:00" // or number (offset from now), omitted/null/0 means no end
+    "schedule": { // schedule time values can be seconds or ISO time string like "2025-01-01T00:00+08:00"
+      "start": 0, // omitted/null/0 means start immediately
+      "end": 30 // omitted/null/0 means no end
     },
     "limits": {
       "rps": 7.5, // omitted/null means no limit
-      "coroutines": 64 // omitted/null default to 64
+      "coroutines": 16 // omitted/null default to 64
     },
     "timeouts": {
       "connect": 5.0, // default to 5.0

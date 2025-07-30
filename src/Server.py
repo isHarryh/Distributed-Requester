@@ -63,19 +63,10 @@ class ClientRecord:
         return self.is_marked_disconnected and self.is_expired()
 
 
-class ClientReport:
-    """Client report data."""
-
-    def __init__(self, client_id: str, span: float, stats: Dict[str, int], bytes_down: int):
-        self.client_id = client_id
-        self.timestamp = time.time()
-        self.span = span
-        self.stats = stats
-        self.bytes_down = bytes_down
-
-
 class Server:
     """FastAPI-based distributed stress testing server."""
+
+    SPEED_INTERVAL = 5  # seconds
 
     def __init__(self, config_path: str):
         # Load initial config to validate and setup server
@@ -96,10 +87,15 @@ class Server:
         self._stats_lock = Lock()
         self._config_lock = Lock()
         self._clients_lock = Lock()
+        self._speed_lock = Lock()
 
         self.total_stats: Dict[str, int] = defaultdict(int)
         self.total_bytes_down = 0
         self.client_records: Dict[str, ClientRecord] = {}
+
+        self.speed_data: Dict[int, float] = {}
+        self.last_speed_timestamp = 0
+        self.last_total_bytes = 0
 
         self._setup_routes()
         self._setup_static_files()
@@ -116,6 +112,42 @@ class Server:
             for client_id in clients_to_remove:
                 Logger.info(f"Removing disconnected client: {client_id}")
                 del self.client_records[client_id]
+
+    def _update_speed_data(self, span: float, bytes_down: int):
+        """Update speed tracking data by distributing bytes over the span period."""
+        current_time = time.time()
+        current_5s_slot = int(current_time // Server.SPEED_INTERVAL) * Server.SPEED_INTERVAL  # Round down
+
+        with self._speed_lock:
+            # Calculate the time range to distribute bytes over
+            start_time = current_time - span
+            start_ks_slot = int(start_time // Server.SPEED_INTERVAL) * Server.SPEED_INTERVAL
+
+            # Ensure we don't go beyond our 10-minute recording limit
+            cutoff_time = current_5s_slot - 600
+            start_ks_slot = max(start_ks_slot, cutoff_time)
+
+            # Generate all slots in the span
+            slots_in_span = []
+            slot = start_ks_slot
+            while slot <= current_5s_slot:
+                slots_in_span.append(slot)
+                slot += Server.SPEED_INTERVAL
+
+            if slots_in_span:
+                # Distribute bytes evenly across all slots in the span
+                bytes_per_slot = bytes_down / len(slots_in_span)
+
+                for slot_time in slots_in_span:
+                    if slot_time >= cutoff_time:  # Only record within our time limit
+                        if slot_time not in self.speed_data:
+                            self.speed_data[slot_time] = 0
+                        self.speed_data[slot_time] += bytes_per_slot
+
+            # Clean up data
+            keys_to_remove = [ts for ts in self.speed_data.keys() if ts < cutoff_time]
+            for key in keys_to_remove:
+                del self.speed_data[key]
 
     def _setup_static_files(self):
         static_dir = os.path.join(os.path.dirname(__file__), "data", "public")
@@ -162,9 +194,6 @@ class Server:
             # Clean up expired clients first
             self._cleanup_expired_clients()
 
-            # Store client report
-            report = ClientReport(request.client_id, request.span, request.stats, request.bytes_down)
-
             # Update or create client record
             with self._clients_lock:
                 if request.client_id in self.client_records:
@@ -185,6 +214,9 @@ class Server:
 
                 self.total_bytes_down += request.bytes_down
 
+            # Update speed tracking data
+            self._update_speed_data(request.span, request.bytes_down)
+
             return StandardResponse(code=0, msg="success", data=None)
 
         @self.app.get("/get_stats", response_model=StandardResponse)
@@ -194,10 +226,22 @@ class Server:
             self._cleanup_expired_clients()
 
             with self._stats_lock:
+                # Get speed data
+                with self._speed_lock:
+                    speed_down = {}
+
+                    for timestamp, bytes_in_slot in self.speed_data.items():
+                        speed_down[timestamp] = int(bytes_in_slot / Server.SPEED_INTERVAL)  # cut off float
+
+                # Get client data
+                with self._clients_lock:
+                    clients = [{"id": client_id} for client_id in self.client_records.keys()]
+
                 stats_data = {
                     "stats": dict(sorted(self.total_stats.items(), key=lambda x: x[1], reverse=True)),
+                    "clients": clients,
                     "bytes_down": self.total_bytes_down,
-                    "active_clients": len(self.client_records),
+                    "speed_down": speed_down,
                 }
 
                 os.makedirs("temp", exist_ok=True)

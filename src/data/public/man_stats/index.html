@@ -483,11 +483,9 @@
             constructor() {
                 this.previousStats = null;
                 this.previousBytes = 0;
-                this.updateInterval = 10000; // ms
-                this.bandwidthHistory = [];
-                this.maxBandwidthHistoryTime = 10 * 60 * 1000; // ms
-                this.lastUpdateTime = null;
+                this.updateInterval = 5000; // ms
                 this.bandwidthChart = null;
+                this.isFirstUpdate = true;
                 this.init();
             }
 
@@ -626,7 +624,9 @@
             updateDashboard(data) {
                 this.updateStatusRows(data.stats);
                 this.updateBytesDownloaded(data.bytes_down);
-                this.updateActiveClients(data.active_clients);
+                this.updateActiveClients(data.clients || []);
+                this.updateBandwidthFromServer(data.speed_down || {});
+                this.isFirstUpdate = false;
             }
 
             updateStatusRows(stats) {
@@ -674,7 +674,7 @@
                     // Update change indicator
                     const $change = $row.find('.status-change');
                     $change.text((change > 0 ? '+' : '') + change);
-                    if (change !== 0) {
+                    if (change !== 0 && !this.isFirstUpdate) {
                         setTimeout(() => {
                             $change.addClass('show');
                             $change.addClass(change > 0 ? 'positive' : 'negative');
@@ -719,27 +719,8 @@
                 $bytesValue.text(humanReadable);
 
                 const change = bytesDown - this.previousBytes;
-                const currentTime = Date.now();
 
-                // Calculate bandwidth if we have previous data
-                if (this.previousBytes !== 0 && this.lastUpdateTime) {
-                    const timeDiff = (currentTime - this.lastUpdateTime) / 1000; // seconds
-                    const bandwidth = timeDiff > 0 ? change / timeDiff : 0;
-
-                    // Store bandwidth sample with actual timestamp
-                    this.bandwidthHistory.push({
-                        bandwidth: bandwidth,
-                        timestamp: currentTime
-                    });
-
-                    // Remove old samples (older than maxBandwidthHistoryTime)
-                    const cutoffTime = currentTime - this.maxBandwidthHistoryTime;
-                    this.bandwidthHistory = this.bandwidthHistory.filter(item => item.timestamp > cutoffTime);
-
-                    this.updateBandwidthStats();
-                }
-
-                if (change !== 0 && this.previousBytes !== 0) {
+                if (change !== 0 && this.previousBytes !== 0 && !this.isFirstUpdate) {
                     const changeText = `${change > 0 ? '+' : ''}${this.formatBytes(Math.abs(change))}`;
                     $bytesChange.text(changeText);
 
@@ -749,45 +730,63 @@
                 }
 
                 this.previousBytes = bytesDown;
-                this.lastUpdateTime = currentTime;
             }
 
-            updateBandwidthStats() {
-                if (this.bandwidthHistory.length === 0) return;
+            updateBandwidthFromServer(speedDown) {
+                // speedDown is a dictionary with timestamp -> B/s mapping
+                const timestamps = Object.keys(speedDown).map(ts => parseInt(ts)).sort((a, b) => a - b);
 
-                const currentBandwidth = this.bandwidthHistory[this.bandwidthHistory.length - 1].bandwidth;
-                const bandwidths = this.bandwidthHistory.map(item => item.bandwidth);
+                if (timestamps.length === 0) {
+                    // No speed data available
+                    $('#currentBandwidth').text('0 B/s');
+                    $('#averageBandwidth').text('0 B/s');
+                    $('#peakBandwidth').text('0 B/s');
+                    this.updateBandwidthChart([], []);
+                    return;
+                }
 
-                const averageBandwidth = bandwidths.reduce((sum, bw) => sum + bw, 0) / bandwidths.length;
-                const peakBandwidth = Math.max(...bandwidths);
+                // Get the speeds in chronological order
+                const speeds = timestamps.map(ts => speedDown[ts]);
 
+                // Calculate statistics
+                const currentBandwidth = speeds[speeds.length - 1] || 0;
+                const averageBandwidth = speeds.length > 0 ? speeds.reduce((sum, speed) => sum + speed, 0) / speeds.length : 0;
+                const peakBandwidth = speeds.length > 0 ? Math.max(...speeds) : 0;
+
+                // Update display
                 $('#currentBandwidth').text(this.formatBandwidth(currentBandwidth));
                 $('#averageBandwidth').text(this.formatBandwidth(averageBandwidth));
                 $('#peakBandwidth').text(this.formatBandwidth(peakBandwidth));
 
-                this.updateBandwidthChart();
-            }
-
-            updateBandwidthChart() {
-                if (!this.bandwidthChart || this.bandwidthHistory.length === 0) return;
-
-                // Prepare chart data with actual timestamps
-                const labels = this.bandwidthHistory.map(item => {
-                    const date = new Date(item.timestamp);
+                // Convert timestamps to labels and speeds to chart data
+                const labels = timestamps.map(ts => {
+                    const date = new Date(ts * 1000); // Convert from seconds to milliseconds
                     const hours = date.getHours().toString().padStart(2, '0');
                     const minutes = date.getMinutes().toString().padStart(2, '0');
                     const seconds = date.getSeconds().toString().padStart(2, '0');
                     return `${hours}:${minutes}:${seconds}`;
                 });
 
-                const data = this.bandwidthHistory.map(item => {
-                    // Convert to KB/s for better chart scaling
-                    return item.bandwidth / 1024;
-                });
+                // Convert speeds to KB/s for better chart scaling
+                const chartData = speeds.map(speed => speed / 1024);
 
-                // Calculate average value for the visible window
-                const avg = data.length > 0 ? data.reduce((a, b) => a + b, 0) / data.length : 0;
-                const avgLine = data.map(() => avg);
+                this.updateBandwidthChart(labels, chartData, averageBandwidth / 1024);
+            }
+
+            updateBandwidthChart(labels, data, averageValue) {
+                if (!this.bandwidthChart) return;
+
+                if (!labels || labels.length === 0 || !data || data.length === 0) {
+                    // Clear chart if no data
+                    this.bandwidthChart.data.labels = [];
+                    this.bandwidthChart.data.datasets[0].data = [];
+                    this.bandwidthChart.data.datasets[1].data = [];
+                    this.bandwidthChart.update('none');
+                    return;
+                }
+
+                // Calculate average line data
+                const avgLine = data.map(() => averageValue || 0);
 
                 // Update chart
                 this.bandwidthChart.data.labels = labels;
@@ -795,8 +794,8 @@
                 this.bandwidthChart.data.datasets[1].data = avgLine;
 
                 // Update y-axis max to provide better scaling
-                const maxValue = Math.max(...data, avg);
-                this.bandwidthChart.options.scales.y.max = maxValue * 1.1;
+                const maxValue = Math.max(...data, averageValue || 0);
+                this.bandwidthChart.options.scales.y.max = maxValue > 0 ? maxValue * 1.1 : 1;
 
                 this.bandwidthChart.update('none'); // Use 'none' for better performance
             }
@@ -830,23 +829,23 @@
                 return `${parseFloat((bytes / Math.pow(k, i)).toFixed(3))} ${sizes[i]}`;
             }
 
-            updateActiveClients(clientCount) {
+            updateActiveClients(clients) {
                 const $container = $('#clientsContainer');
                 $container.empty();
 
-                if (clientCount === 0) {
+                if (!clients || clients.length === 0) {
                     $container.html('<div class="no-clients">No active clients</div>');
                     return;
                 }
 
-                for (let i = 1; i <= clientCount; i++) {
+                clients.forEach((client, index) => {
                     const $circle = $(`
-                        <div class="client-circle" style="animation-delay: ${i * 0.1}s">
-                            ${i}
+                        <div class="client-circle" style="animation-delay: ${(index + 1) * 0.1}s" title="${client.id}">
+                            ${index + 1}
                         </div>
                     `);
                     $container.append($circle);
-                }
+                });
             }
 
             updateLastUpdated() {

@@ -8,8 +8,9 @@ from datetime import datetime, timezone
 from threading import Lock
 
 import httpx
+import socksio
 
-from src.Config import TaskConfig, Config, ConsecutiveStatusRuleConfig
+from src.Config import TaskConfig, Config, ConsecutiveStatusRuleConfig, ProxyConfig
 from src.Request import RequestWorker, RequestRecord
 from src.utils.StringFormatter import format_delta_time
 from src.utils.ResponseStatus import ResponseStatus
@@ -19,55 +20,79 @@ from src.utils.Logger import Logger
 class ProxyPool:
     """Thread-safe proxy pool for managing proxy rotation."""
 
-    def __init__(self, proxies: List[Optional[str]], proxy_order: str):
+    def __init__(self, proxies: List[Optional[str]], proxy_config: ProxyConfig):
         self._lock = Lock()
         self._current_index = 0
         self._proxies = proxies if proxies else [None]  # Default to direct connection
-        self._order = proxy_order
+        self._proxy_config = proxy_config
 
-        Logger.info(f"ProxyPool initialized with {len(self._proxies)} proxies ({proxy_order})")
+        Logger.info(f"ProxyPool initialized with {len(self._proxies)} proxies")
 
     def get_proxy(self) -> Optional[str]:
-        with self._lock:
-            if self._order == "random":
-                return random.choice(self._proxies)
-            elif self._order == "sequential":
-                proxy = self._proxies[self._current_index]
-                self._current_index = (self._current_index + 1) % len(self._proxies)
-                return proxy
-            elif self._order == "switchByRule":
-                return self._proxies[self._current_index]
-            else:
-                return random.choice(self._proxies)
+        if self._proxy_config.order == "random":
+            return self.switch_to_random()
+        elif self._proxy_config.order == "sequential":
+            return self.switch_to(1)
+        elif self._proxy_config.order == "switchByRule":
+            return self.get_current_proxy()
+        else:
+            return self.switch_to_random()
 
-    def switch_to_next(self) -> Optional[str]:
+    def switch_to(self, offset: int) -> Optional[str]:
+        prev_index = self._current_index
         with self._lock:
-            self._current_index = (self._current_index + 1) % len(self._proxies)
-            proxy = self._proxies[self._current_index]
-            Logger.info(f"Switched to next proxy: {proxy or 'direct connection'}")
-            return proxy
-
-    def switch_to_prev(self) -> Optional[str]:
-        with self._lock:
-            self._current_index = (self._current_index - 1) % len(self._proxies)
-            proxy = self._proxies[self._current_index]
-            Logger.info(f"Switched to previous proxy: {proxy or 'direct connection'}")
-            return proxy
+            if self._current_index != prev_index:
+                Logger.debug("Proxy already switched, returning current proxy")
+                return self.get_current_proxy()
+            i = max(self._proxy_config.preflight_max_switches, 1)
+            while i > 0:
+                self._current_index = (self._current_index + offset) % len(self._proxies)
+                if not self._preflight():
+                    i -= 1
+                    continue
+                Logger.info(f"Switched to proxy: {self.get_current_proxy()}")
+                return self.get_current_proxy()
 
     def switch_to_random(self) -> Optional[str]:
+        prev_index = self._current_index
         with self._lock:
-            new_index = random.randint(0, len(self._proxies) - 1)
-            self._current_index = new_index
-            proxy = self._proxies[self._current_index]
-            Logger.info(f"Switched to random proxy: {proxy or 'direct connection'}")
-            return proxy
+            if self._current_index != prev_index:
+                Logger.debug("Proxy already switched, returning current proxy")
+                return self.get_current_proxy()
+            i = max(self._proxy_config.preflight_max_switches, 1)
+            while i > 0:
+                new_index = random.randint(0, len(self._proxies) - 1)
+                self._current_index = new_index
+                if not self._preflight():
+                    i -= 1
+                    continue
+                Logger.info(f"Switched to random proxy: {self.get_current_proxy()}")
+                return self.get_current_proxy()
 
     def get_current_proxy(self) -> Optional[str]:
-        with self._lock:
-            return self._proxies[self._current_index]
+        return self._proxies[self._current_index]
 
     def get_proxy_count(self) -> int:
         return len(self._proxies)
+
+    def _preflight(self) -> bool:
+        if not self._proxy_config.preflight or not self._proxy_config.preflight_url:
+            return True
+        if not self._proxy_config.order == "switchByRule":
+            return True
+
+        try:
+            Logger.debug(f"Proxy preflight check starting ({self.get_current_proxy()})")
+            httpx.get(
+                self._proxy_config.preflight_url,
+                proxy=self.get_current_proxy(),
+                timeout=self._proxy_config.preflight_timeout,
+            )
+            Logger.info(f"Proxy preflight passed ({self.get_current_proxy()})")
+            return True
+        except (httpx.RequestError, socksio.exceptions.ProtocolError) as e:
+            Logger.warning(f"Proxy preflight failed ({self.get_current_proxy()}): {type(e).__name__} {e}")
+            return False
 
 
 class RuleExecutor:
@@ -122,10 +147,10 @@ class RuleExecutor:
     def _execute_action(self, action: str) -> str:
         try:
             if action == "switchToNextProxy":
-                self.proxy_pool.switch_to_next()
+                self.proxy_pool.switch_to(1)
                 return "proxy_switched"
             elif action == "switchToPrevProxy":
-                self.proxy_pool.switch_to_prev()
+                self.proxy_pool.switch_to(-1)
                 return "proxy_switched"
             elif action == "switchToRandomProxy":
                 self.proxy_pool.switch_to_random()
@@ -449,7 +474,7 @@ class Client:
     def __init__(self, task_config: TaskConfig, server_config: Optional[Config] = None, partial_span: int = 60):
         self.task_config = task_config
         self.server_config = server_config
-        self.proxy_pool = ProxyPool(proxies=task_config.proxies, proxy_order=task_config.policy.proxy_order)
+        self.proxy_pool = ProxyPool(proxies=task_config.proxies, proxy_config=task_config.policy.proxy)
         self.stats = OverallStats(
             partial_span=partial_span, proxy_pool=self.proxy_pool, rule_callback=self._process_rule_response
         )
@@ -587,6 +612,7 @@ class Client:
             workers.append(worker)
 
         # Start all workers
+        Logger.info("Starting workers")
         for worker in workers:
             worker.start()
 

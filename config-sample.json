@@ -23,7 +23,6 @@
       "policy": {
         "reuse_connections": true,
         "order": "random",
-        "proxy_order": "sequential",
         "schedule": {
           "start": 0,
           "end": 30

@@ -2,6 +2,7 @@ from enum import Enum
 from typing import Union
 
 import httpx
+import socksio
 
 
 class ResponseStatus(Enum):
@@ -43,7 +44,7 @@ class ResponseStatus(Enum):
             return ResponseStatus.POOL_TIMEOUT
         elif isinstance(response, httpx.NetworkError):
             return ResponseStatus.NETWORK_ERROR
-        elif isinstance(response, httpx.ProtocolError):
+        elif isinstance(response, (httpx.ProtocolError, socksio.ProtocolError)):
             return ResponseStatus.PROTOCOL_ERROR
         elif isinstance(response, httpx.TooManyRedirects):
             return ResponseStatus.TOO_MANY_REDIRECTS

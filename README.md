@@ -92,7 +92,6 @@ The `tasks` list contains some task objects whose schema is as follows:
   "policy": { // optional (children are also optional)
     "reuse_connections": true, // default to true
     "order": "random", // default to "random", currently only "random" is supported
-    "proxy_order": "switchByRule", // default to "random", can be "random", "sequential", "switchByRule"
     "schedule": { // schedule time values can be seconds or ISO time string like "2025-01-01T00:00+08:00"
       "start": 0, // omitted/null/0 means start immediately
       "end": 30 // omitted/null/0 means no end
@@ -105,6 +104,13 @@ The `tasks` list contains some task objects whose schema is as follows:
       "connect": 5.0, // default to 5.0
       "read": 10.0, // default to 10.0
       "write": 10.0 // default to 10.0
+    },
+    "proxy": {
+      "order": "switchByRule", // default to "random", can be "random", "sequential", "switchByRule"
+      "preflight": false, // default to false, if true, will preflight the proxy before using it, only available in "switchByRule" mode
+      "preflight_url": "https://httpbin.org/get", // required if preflight is true
+      "preflight_timeout": 5.0, // default to 5.0
+      "preflight_max_switches": 3, // default to 3, the maximum number of times to switch proxies during preflight
     }
   },
   "prefabs": { // optional (children are also optional)

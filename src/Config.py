@@ -52,15 +52,32 @@ class TimeoutsConfig(BaseModel):
         return httpx.Timeout(connect=self.connect, read=self.read, write=self.write, pool=None)
 
 
+class ProxyConfig(BaseModel):
+    """Proxy policy configuration"""
+
+    order: Literal["random", "sequential", "switchByRule"] = "random"
+    preflight: bool = True
+    preflight_url: Optional[str] = None
+    preflight_timeout: float = 5.0
+    preflight_max_switches: int = 3
+
+    @field_validator("preflight_url")
+    @classmethod
+    def validate_preflight_url(cls, v):
+        if v and not v.startswith(("http://", "https://")):
+            raise ConfigError("Preflight URL must start with http:// or https://")
+        return v
+
+
 class PolicyConfig(BaseModel):
     """Policy configuration"""
 
     reuse_connections: bool = True
     order: Literal["random"] = "random"
-    proxy_order: Literal["random", "sequential", "switchByRule"] = "random"
     schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)
     limits: LimitsConfig = Field(default_factory=LimitsConfig)
     timeouts: TimeoutsConfig = Field(default_factory=TimeoutsConfig)
+    proxy: ProxyConfig = Field(default_factory=ProxyConfig)
 
 
 class RuleConfigBase(BaseModel):

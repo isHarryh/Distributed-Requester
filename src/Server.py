@@ -103,11 +103,12 @@ class Server:
     def _cleanup_expired_clients(self):
         with self._clients_lock:
             clients_to_remove = []
-            for client_id, record in self.client_records.items():
-                if record.should_be_removed():
-                    clients_to_remove.append(client_id)
-                elif record.is_expired() and not record.is_marked_disconnected:
-                    record.is_marked_disconnected = True
+            for client_id, client in self.client_records.items():
+                if client.is_expired():
+                    if client.is_marked_disconnected:
+                        clients_to_remove.append(client_id)
+                    else:
+                        client.is_marked_disconnected = True
 
             for client_id in clients_to_remove:
                 Logger.info(f"Removing disconnected client: {client_id}")
@@ -235,7 +236,10 @@ class Server:
 
                 # Get client data
                 with self._clients_lock:
-                    clients = [{"id": client_id} for client_id in self.client_records.keys()]
+                    clients = [
+                        {"id": client_id, "last_seen": self.client_records[client_id].last_seen}
+                        for client_id in self.client_records.keys()
+                    ]
 
                 stats_data = {
                     "stats": dict(sorted(self.total_stats.items(), key=lambda x: x[1], reverse=True)),

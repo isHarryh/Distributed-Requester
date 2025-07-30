@@ -10,7 +10,7 @@ from threading import Lock
 import httpx
 
 from src.Config import TaskConfig, Config, ConsecutiveStatusRuleConfig
-from src.Request import RequestWorker, RequestRecord, RateLimiter
+from src.Request import RequestWorker, RequestRecord
 from src.utils.StringFormatter import format_delta_time
 from src.utils.ResponseStatus import ResponseStatus
 from src.utils.Logger import Logger
@@ -570,25 +570,8 @@ class Client:
         Logger.info(f"End Time: {end_time.isoformat() if end_time else 'No end time set'}")
         Logger.info("-" * 80)
 
-    async def _run_with_shared_client(
-        self,
-        rate_limiter: Optional[RateLimiter],
-        end_time: Optional[datetime],
-    ):
-        # With new worker design, shared vs independent is handled by reuse_connections policy
-        await self._run_client_loop(rate_limiter, end_time)
-
-    async def _run_with_independent_clients(
-        self,
-        rate_limiter: Optional[RateLimiter],
-        end_time: Optional[datetime],
-    ):
-        # With new worker design, shared vs independent is handled by reuse_connections policy
-        await self._run_client_loop(rate_limiter, end_time)
-
     async def _run_client_loop(
         self,
-        rate_limiter: Optional[RateLimiter],
         end_time: Optional[datetime],
     ):
         stop_event = asyncio.Event()
@@ -598,7 +581,6 @@ class Client:
         for _ in range(self.task_config.policy.limits.coroutines):
             worker = RequestWorker(
                 task_config=self.task_config,
-                rate_limiter=rate_limiter,
                 response_callback=self.stats.add_result,
                 proxy_provider=self.proxy_pool.get_proxy,
             )
@@ -660,20 +642,10 @@ class Client:
         self._print_test_info()
 
         # Extract configuration
-        limits = self.task_config.policy.limits
         end_time = self.task_config.policy.schedule.get_end_time()
 
-        # Create rate limiter
-        rate_limiter = None
-        if limits.rps:
-            rate_limiter = RateLimiter(limits.rps)
-
         try:
-            if self.task_config.policy.reuse_connections:
-                await self._run_with_shared_client(rate_limiter, end_time)
-            else:
-                await self._run_with_independent_clients(rate_limiter, end_time)
-
+            await self._run_client_loop(end_time)
         except Exception as e:
             Logger.error(f"Error in client: {type(e).__name__} {e}")
             return

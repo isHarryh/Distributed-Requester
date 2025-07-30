@@ -96,18 +96,20 @@ class RequestRecord:
 class RateLimiter:
     """Rate limiter to control requests per second."""
 
-    def __init__(self, max_rps: float):
+    def __init__(self, max_rps: float, stop_event: Optional[asyncio.Event] = None):
         self._interval = 1.0 / max(1.0, max_rps)
         self._lock = asyncio.Lock()
+        self._stop_event = stop_event
         self.last_request_time = 0.0
 
     async def acquire(self):
         async with self._lock:
-            current_time = time.time()
-            wait_time = self._interval - (current_time - self.last_request_time)
-            if wait_time > 0:
-                await asyncio.sleep(wait_time)
-            self.last_request_time = time.time()
+            if not self._stop_event or not self._stop_event.is_set():
+                current_time = time.time()
+                wait_time = self._interval - (current_time - self.last_request_time)
+                if wait_time > 0:
+                    await asyncio.sleep(wait_time)
+                self.last_request_time = time.time()
 
 
 class RequestWorker:
@@ -116,22 +118,20 @@ class RequestWorker:
     def __init__(
         self,
         task_config: TaskConfig,
-        rate_limiter: Optional[RateLimiter] = None,
         response_callback: Optional[Callable[[RequestRecord], None]] = None,
         proxy_provider: Optional[Callable[[], Optional[str]]] = None,
     ):
         self.task_config = task_config
-        self.rate_limiter = rate_limiter
         self.response_callback = response_callback
         self.proxy_provider = proxy_provider  # Function to get current proxy
 
         # HTTP client configuration
-        self.limits_config = httpx.Limits(
+        self.limits = httpx.Limits(
             max_keepalive_connections=(
                 self.task_config.policy.limits.coroutines if self.task_config.policy.reuse_connections else 1
             )
         )
-        self.timeout_config = self.task_config.policy.timeouts.build()
+        self.timeouts = self.task_config.policy.timeouts.build()
 
         # Client management
         self._current_proxy: Optional[str] = None
@@ -141,6 +141,10 @@ class RequestWorker:
         self._task: Optional[asyncio.Task] = None
         self._state = RequestState.WAITING
         self._stop_event = asyncio.Event()
+
+        # Rate limiter
+        rps = self.task_config.policy.limits.rps
+        self._rate_limiter = RateLimiter(rps, stop_event=self._stop_event) if rps else None
 
     async def _ensure_client(self):
         """Ensure we have a valid HTTP client for the current proxy"""
@@ -159,8 +163,8 @@ class RequestWorker:
             if self._session and not self._session.is_closed:
                 await self._session.aclose()
 
-            limits = self.limits_config
-            timeout = self.timeout_config
+            limits = self.limits
+            timeout = self.timeouts
             follow_redirects = True
             proxy = current_proxy if current_proxy else None
             transport = None
@@ -247,8 +251,8 @@ class RequestWorker:
         """Internal run method"""
         try:
             while not self._stop_event.is_set():
-                if self.rate_limiter:
-                    await self.rate_limiter.acquire()
+                if self._rate_limiter:
+                    await self._rate_limiter.acquire()
 
                 if self._stop_event.is_set():
                     break

@@ -1,4 +1,4 @@
-from typing import Optional, Union, List, Dict, Callable
+from typing import Optional, List, Dict, Callable
 import asyncio
 import time
 import uuid
@@ -10,9 +10,9 @@ from threading import Lock
 import httpx
 
 from src.Config import TaskConfig, Config, ConsecutiveStatusRuleConfig
-from src.Request import RequestWorker, RateLimiter
+from src.Request import RequestWorker, RequestRecord, RateLimiter
 from src.utils.StringFormatter import format_delta_time
-from src.utils.ResponseStatus import HttpStatus, ResponseStatus
+from src.utils.ResponseStatus import ResponseStatus
 from src.utils.Logger import Logger
 
 
@@ -152,7 +152,12 @@ class RuleExecutor:
 
 class OverallStats:
 
-    def __init__(self, partial_span: int = 60, proxy_pool: Optional[ProxyPool] = None):
+    def __init__(
+        self,
+        partial_span: int = 60,
+        proxy_pool: Optional[ProxyPool] = None,
+        rule_callback: Optional[Callable[[ResponseStatus], Optional[str]]] = None,
+    ):
         self._lock = Lock()
 
         # Overall statistics
@@ -171,18 +176,11 @@ class OverallStats:
         self.partial_span = partial_span
         self.second_stats = deque(maxlen=partial_span)
 
-        # Proxy pool
-        self.proxy_pool = proxy_pool
-
         # Status type statistics
         self.status_counts = {status: 0 for status in ResponseStatus}
 
-        # Callback for rule processing
-        self.rule_callback: Optional[Callable[[ResponseStatus], Optional[str]]] = None
-
-    def set_rule_callback(self, callback: Callable[[ResponseStatus], Optional[str]]):
-        """Set callback function for rule processing"""
-        self.rule_callback = callback
+        self.proxy_pool = proxy_pool
+        self.rule_callback = rule_callback
 
     @staticmethod
     def _estimate_request_size(response: httpx.Response) -> int:
@@ -193,23 +191,22 @@ class OverallStats:
         response_body_len = len(response.content) if response.content else 0
         return request_headers_len + request_body_len + response_headers_len + response_body_len
 
-    def add_result(self, request: httpx.Request, response: Union[httpx.Response, Exception], start_time: float):
+    def add_result(self, record: RequestRecord):
         with self._lock:
-            response_time = time.time() - start_time
-
-            response_status = ResponseStatus.of(response)
+            response_time = record.get_duration()
+            response_status = record.get_status()
 
             if not response_status.is_exception():
-                assert isinstance(response, httpx.Response)
-                bytes_down = OverallStats._estimate_request_size(response)
+                bytes_down = record.get_response_size()
                 self.bytes_down += bytes_down
 
-                http_status = HttpStatus.of(response)
+                content = record.get_response_content()
+                http_status = record.get_http_status()
+
                 Logger.debug(
-                    f"{request.method} {response_status.name} {http_status.value} {request.url} "
+                    f"{record.get_method()} {response_status.name} {http_status.value} {record.get_url()} "
                     + f"in {response_time*1000:.0f}ms, "
-                    + f"preview: `{response.content[:64] if len(response.content) > 64 else response.content}` "
-                    + f"(full {len(response.content)}B)"
+                    + f"preview: `{content[:64] if len(content) > 64 else content}` (full {len(content)}B)"
                 )
 
                 if response_status == ResponseStatus.SUCCESS:
@@ -217,10 +214,12 @@ class OverallStats:
                 else:
                     self.failure_requests += 1
             else:
+                exception = record.get_exception()
+
                 Logger.debug(
-                    f"{request.method} {response_status.name} {request.url} "
+                    f"{record.get_method()} {response_status.name} {record.get_url()} "
                     + f"in {response_time*1000:.0f}ms, "
-                    + f"{type(response).__name__} {response}"
+                    + f"{type(exception).__name__} {exception}"
                 )
 
                 bytes_down = 0
@@ -451,7 +450,9 @@ class Client:
         self.task_config = task_config
         self.server_config = server_config
         self.proxy_pool = ProxyPool(proxies=task_config.proxies, proxy_order=task_config.policy.proxy_order)
-        self.stats = OverallStats(partial_span=partial_span, proxy_pool=self.proxy_pool)
+        self.stats = OverallStats(
+            partial_span=partial_span, proxy_pool=self.proxy_pool, rule_callback=self._process_rule_response
+        )
         self.last_report_time = time.time()
         self.client_id = str(uuid.uuid4())
 
@@ -472,9 +473,6 @@ class Client:
         # Control flags for rule actions
         self._stop_task_requested = False
         self._stop_program_requested = False
-
-        # Set up rule processing callback
-        self.stats.set_rule_callback(self._process_rule_response)
 
         Logger.info(f"Client initialized with ID {self.client_id} (report interval {self.report_interval}s)")
         Logger.info(f"Proxy pool: {self.proxy_pool.get_proxy_count()} proxies, Rules: {len(task_config.rules)}")
@@ -595,24 +593,14 @@ class Client:
     ):
         stop_event = asyncio.Event()
 
-        max_connections = self.task_config.policy.limits.coroutines
-
-        # Prepare HTTP client configuration
-        limits_config = httpx.Limits(
-            max_keepalive_connections=(max_connections if self.task_config.policy.reuse_connections else 1)
-        )
-        timeout_config = self.task_config.policy.timeouts.build()
-
         # Create worker instances with proxy provider
         workers = []
-        for _ in range(max_connections):
+        for _ in range(self.task_config.policy.limits.coroutines):
             worker = RequestWorker(
                 task_config=self.task_config,
                 rate_limiter=rate_limiter,
                 response_callback=self.stats.add_result,
                 proxy_provider=self.proxy_pool.get_proxy,
-                limits_config=limits_config,
-                timeout_config=timeout_config,
             )
             workers.append(worker)
 

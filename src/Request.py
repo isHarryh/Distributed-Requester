@@ -9,6 +9,7 @@ import httpx
 
 from src.Config import TaskConfig, RequestConfig
 from src.utils.CustomTransport import AsyncCustomHost, NameSolver
+from src.utils.ResponseStatus import ResponseStatus, HttpStatus
 
 
 class RequestState(Enum):
@@ -17,6 +18,79 @@ class RequestState(Enum):
     WAITING = "Waiting"
     WORKING = "Working"
     STOPPED = "Stopped"
+
+
+class RequestRecord:
+    def __init__(self):
+        self._request: Optional[httpx.Request] = None
+        self._result: Optional[Union[httpx.Response, Exception]] = None
+        self._start_time: Optional[float] = None
+        self._end_time: Optional[float] = None
+
+    def timing_start(self):
+        self._start_time = time.time()
+
+    def timing_end(self):
+        if self._start_time is None:
+            raise ValueError("Start time not set")
+        self._end_time = time.time()
+
+    def put_request(self, request: httpx.Request):
+        self._request = request
+
+    def put_result(self, result: Union[httpx.Response, Exception]):
+        self._result = result
+
+    def get_method(self) -> str:
+        if self._request is None:
+            raise ValueError("Request not set")
+        return self._request.method
+
+    def get_url(self) -> str:
+        if self._request is None:
+            raise ValueError("Request not set")
+        return str(self._request.url)
+
+    def get_status(self) -> ResponseStatus:
+        if self._result is None:
+            raise ValueError("Result not set")
+        return ResponseStatus.of(self._result)
+
+    def get_response_content(self) -> bytes:
+        if self._result is None or not isinstance(self._result, httpx.Response):
+            raise ValueError("Result not set or not a valid response")
+        return self._result.content
+
+    def get_exception(self) -> Optional[Exception]:
+        if self._result is None:
+            raise ValueError("Result not set")
+        if isinstance(self._result, Exception):
+            return self._result
+        return None
+
+    def get_http_status(self) -> HttpStatus:
+        if self._result is None:
+            raise ValueError("Result not set")
+        if not isinstance(self._result, httpx.Response):
+            raise ValueError("Result is not a valid HTTP response")
+        return HttpStatus.of(self._result)
+
+    def get_duration(self) -> float:
+        return self._end_time - self._start_time if self._end_time and self._start_time else 0.0
+
+    def get_request_size(self) -> int:
+        if self._request is None:
+            raise ValueError("Request not set")
+        headers_size = sum(len(k) + len(v) + 4 for k, v in self._request.headers.items())
+        body_size = len(self._request.content) if self._request.content else 0
+        return headers_size + body_size
+
+    def get_response_size(self) -> int:
+        if self._result is None or not isinstance(self._result, httpx.Response):
+            raise ValueError("Result not set or not a valid response")
+        headers_size = sum(len(k) + len(v) + 4 for k, v in self._result.headers.items())
+        body_size = len(self._result.content) if self._result.content else 0
+        return headers_size + body_size
 
 
 class RateLimiter:
@@ -43,10 +117,8 @@ class RequestWorker:
         self,
         task_config: TaskConfig,
         rate_limiter: Optional[RateLimiter] = None,
-        response_callback: Optional[Callable[[httpx.Request, Union[httpx.Response, Exception], float], None]] = None,
+        response_callback: Optional[Callable[[RequestRecord], None]] = None,
         proxy_provider: Optional[Callable[[], Optional[str]]] = None,
-        limits_config: Optional[httpx.Limits] = None,
-        timeout_config: Optional[httpx.Timeout] = None,
     ):
         self.task_config = task_config
         self.rate_limiter = rate_limiter
@@ -54,8 +126,12 @@ class RequestWorker:
         self.proxy_provider = proxy_provider  # Function to get current proxy
 
         # HTTP client configuration
-        self.limits_config = limits_config or httpx.Limits(max_keepalive_connections=1)
-        self.timeout_config = timeout_config or httpx.Timeout(connect=5.0, read=10.0, write=10.0, pool=5.0)
+        self.limits_config = httpx.Limits(
+            max_keepalive_connections=(
+                self.task_config.policy.limits.coroutines if self.task_config.policy.reuse_connections else 1
+            )
+        )
+        self.timeout_config = self.task_config.policy.timeouts.build()
 
         # Client management
         self._current_proxy: Optional[str] = None
@@ -103,10 +179,6 @@ class RequestWorker:
             )
             self._current_proxy = current_proxy
 
-    def get_state(self) -> RequestState:
-        """Get current worker state"""
-        return self._state
-
     async def join(self, timeout: Optional[float] = None) -> bool:
         """Wait for task completion with optional timeout"""
         if self._task is None:
@@ -135,18 +207,8 @@ class RequestWorker:
                 return str(request_config.data)
         return None
 
-    @staticmethod
-    def estimate_response_size(response: httpx.Response) -> int:
-        """Estimate the total size of request and response"""
-        request = response.request
-        request_headers_len = len("\r\n".join(f"{k}: {v}" for k, v in request.headers.items()))
-        request_body_len = len(request.content) if request.content else 0
-        response_headers_len = len("\r\n".join(f"{k}: {v}" for k, v in response.headers.items()))
-        response_body_len = len(response.content) if response.content else 0
-        return request_headers_len + request_body_len + response_headers_len + response_body_len
-
-    async def _execute_request(self) -> tuple[httpx.Request, Union[httpx.Response, Exception], float]:
-        """Execute a single request and return response, time taken, and bytes count"""
+    async def _execute_request(self) -> RequestRecord:
+        """Execute a single request and return response record"""
         # Select request for this iteration
         request_config = self._select_request()
         post_data = self._prepare_request_data(request_config)
@@ -165,7 +227,9 @@ class RequestWorker:
         else:
             request = self._session.build_request("GET", request_config.url, headers=merged_headers)
 
-        start_time = time.time()
+        record = RequestRecord()
+        record.put_request(request)
+        record.timing_start()
 
         try:
             self._state = RequestState.WORKING
@@ -175,8 +239,9 @@ class RequestWorker:
         finally:
             self._state = RequestState.WAITING
 
-        response_time = time.time() - start_time
-        return request, response, response_time
+        record.timing_end()
+        record.put_result(response)
+        return record
 
     async def _run(self):
         """Internal run method"""
@@ -188,11 +253,11 @@ class RequestWorker:
                 if self._stop_event.is_set():
                     break
 
-                request, response, response_time = await self._execute_request()
+                record = await self._execute_request()
 
                 # Report statistics if callback is set
                 if self.response_callback:
-                    self.response_callback(request, response, time.time() - response_time)
+                    self.response_callback(record)
 
                 if self._stop_event.is_set():
                     break

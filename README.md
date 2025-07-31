@@ -7,6 +7,24 @@ Distributed stress testing tool for web servers
 
 This tool is designed for distributed stress testing of web servers. It supports both offline mode with predefined tasks and distributed mode where clients will fetch tasks from server in advance.
 
+```mermaid
+flowchart TD
+    subgraph Distributed Mode
+    A[Server]
+    A --Control--> B1[Client 1]
+    A --Control--> B2[Client 2]
+    A --Control--> B3[...]
+    C[Target]
+    B1 --Send Requests--> C
+    B2 --Send Requests--> C
+    B3 --Send Requests--> C
+    end
+
+    subgraph Offline Mode
+    D[Your Machine] --Send Requests--> E[Target]
+    end
+```
+
 ## Get Started
 
 ### Installation
@@ -40,7 +58,7 @@ The config file is a JSON file that looks like this:
 
 ```jsonc
 {
-  "version": "0.4",
+  "version": "0.5", // required
   "tasks": [
     // ...
   ],

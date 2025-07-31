@@ -115,7 +115,8 @@ The `tasks` list contains some task objects whose schema is as follows:
       "end": 30 // omitted/null/0 means no end
     },
     "limits": {
-      "rps": 7.5, // omitted/null means no limit
+      "rps": 5, // omitted/null means no limit
+      "rpm": 250, // omitted/null means no limit
       "coroutines": 16 // omitted/null default to 64
     },
     "timeouts": {

@@ -37,7 +37,8 @@ class ScheduleConfig(BaseModel):
 class LimitsConfig(BaseModel):
     """Limits configuration"""
 
-    rps: Optional[float] = None
+    rps: float = float("inf")
+    rpm: float = float("inf")
     coroutines: int = 64
 
 

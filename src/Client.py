@@ -13,6 +13,7 @@ import socksio
 from src.Config import TaskConfig, Config, ConsecutiveStatusRuleConfig, ProxyConfig
 from src.Request import RequestWorker, RequestRecord
 from src.utils.StringFormatter import format_delta_time
+from src.utils.RateLimiter import RateLimiter
 from src.utils.ResponseStatus import ResponseStatus
 from src.utils.Logger import Logger
 
@@ -22,7 +23,7 @@ class ProxyPool:
 
     def __init__(self, proxies: List[Optional[str]], proxy_config: ProxyConfig):
         self._lock = Lock()
-        self._current_index = 0
+        self._current_index = -1
         self._proxies = proxies if proxies else [None]  # Default to direct connection
         self._proxy_config = proxy_config
 
@@ -34,7 +35,7 @@ class ProxyPool:
         elif self._proxy_config.order == "sequential":
             return self.switch_to(1)
         elif self._proxy_config.order == "switchByRule":
-            return self.get_current_proxy()
+            return self.switch_by_rule()
         else:
             return self.switch_to_random()
 
@@ -50,7 +51,8 @@ class ProxyPool:
                 if not self._preflight():
                     i -= 1
                     continue
-                Logger.info(f"Switched to proxy: {self.get_current_proxy()}")
+                if prev_index != self._current_index:
+                    Logger.info(f"Switched to proxy: {self.get_current_proxy()}")
                 return self.get_current_proxy()
 
     def switch_to_random(self) -> Optional[str]:
@@ -66,8 +68,16 @@ class ProxyPool:
                 if not self._preflight():
                     i -= 1
                     continue
-                Logger.info(f"Switched to random proxy: {self.get_current_proxy()}")
+                if prev_index != self._current_index:
+                    Logger.info(f"Switched to random proxy: {self.get_current_proxy()}")
                 return self.get_current_proxy()
+
+    def switch_by_rule(self) -> Optional[str]:
+        with self._lock:
+            if self._current_index < 0 or self._current_index >= len(self._proxies):
+                self._current_index = 0
+                Logger.info(f"Switched to first proxy: {self.get_current_proxy()}")
+            return self.get_current_proxy()
 
     def get_current_proxy(self) -> Optional[str]:
         return self._proxies[self._current_index]
@@ -600,12 +610,18 @@ class Client:
         end_time: Optional[datetime],
     ):
         stop_event = asyncio.Event()
+        rate_limiter = RateLimiter(
+            self.task_config.policy.limits.rps,
+            self.task_config.policy.limits.rpm,
+            stop_event=stop_event,
+        )
 
         # Create worker instances with proxy provider
         workers = []
         for _ in range(self.task_config.policy.limits.coroutines):
             worker = RequestWorker(
                 task_config=self.task_config,
+                rate_limiter=rate_limiter,
                 response_callback=self.stats.add_result,
                 proxy_provider=self.proxy_pool.get_proxy,
             )

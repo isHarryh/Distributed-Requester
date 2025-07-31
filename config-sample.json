@@ -28,7 +28,8 @@
           "end": 30
         },
         "limits": {
-          "rps": 7.5,
+          "rps": 5,
+          "rpm": 250,
           "coroutines": 16
         },
         "timeouts": {

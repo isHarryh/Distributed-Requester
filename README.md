@@ -58,7 +58,7 @@ The config file is a JSON file that looks like this:
 
 ```jsonc
 {
-  "version": "0.5", // required
+  "version": "0.6", // required
   "tasks": [
     // ...
   ],

@@ -1,6 +1,6 @@
 [project]
 name = "Distributed-Requester"
-version = "0.5.0"
+version = "0.6.0"
 description = "Distributed stress testing tool for web servers"
 authors = [
     {name = "Harry Huang", email = "harryhuang2652@qq.com"}

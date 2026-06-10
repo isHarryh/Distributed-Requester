@@ -108,6 +108,7 @@ The `tasks` list contains some task objects whose schema is as follows:
     }
   ],
   "policy": { // optional (children are also optional)
+    "skip_ssl_verification": false, // default to false, if true, skips TLS certificate verification
     "reuse_connections": true, // default to true
     "order": "random", // default to "random", currently only "random" is supported
     "schedule": { // schedule time values can be seconds or ISO time string like "2025-01-01T00:00+08:00"

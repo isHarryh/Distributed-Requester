@@ -6,7 +6,6 @@ from datetime import datetime, timezone, timedelta
 import httpx
 from pydantic import BaseModel, Field, field_validator
 
-
 VERSION = "0.6"
 COMPATIBLE_VERSIONS = ["0.1", "0.2", "0.3", "0.4", "0.5", "0.6"]
 
@@ -73,6 +72,7 @@ class ProxyConfig(BaseModel):
 class PolicyConfig(BaseModel):
     """Policy configuration"""
 
+    skip_ssl_verification: bool = False
     reuse_connections: bool = True
     order: Literal["random"] = "random"
     schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)

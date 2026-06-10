@@ -21,6 +21,7 @@
       "rules": [
       ],
       "policy": {
+        "skip_ssl_verification": false,
         "reuse_connections": true,
         "order": "random",
         "schedule": {

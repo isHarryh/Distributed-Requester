@@ -149,10 +149,13 @@ class RequestWorker:
             proxy = current_proxy if current_proxy else None
             transport = None
 
+            skip_ssl_verification = self.task_config.policy.skip_ssl_verification
+            verify = not skip_ssl_verification
+
             # Check if custom host resolution is needed
             if self.task_config.prefabs.override_hosts:
                 name_solver = NameSolver(self.task_config.prefabs.override_hosts)
-                transport = AsyncCustomHost(name_solver)
+                transport = AsyncCustomHost(name_solver, verify=verify)
 
             self._session = httpx.AsyncClient(
                 limits=limits,
@@ -160,6 +163,7 @@ class RequestWorker:
                 follow_redirects=follow_redirects,
                 transport=transport,
                 proxy=proxy,
+                verify=verify,
             )
             self._current_proxy = current_proxy
 

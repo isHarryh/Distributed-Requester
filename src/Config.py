@@ -6,8 +6,8 @@ from datetime import datetime, timezone, timedelta
 import httpx
 from pydantic import BaseModel, Field, field_validator
 
-VERSION = "0.6"
-COMPATIBLE_VERSIONS = ["0.1", "0.2", "0.3", "0.4", "0.5", "0.6"]
+VERSION = "0.7"
+COMPATIBLE_VERSIONS = ["0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7"]
 
 
 class ConfigError(Exception):

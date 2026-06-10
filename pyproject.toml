@@ -1,17 +1,15 @@
 [project]
 name = "Distributed-Requester"
-version = "0.6.0"
+version = "0.7.0"
 description = "Distributed stress testing tool for web servers"
-authors = [
-    {name = "Harry Huang", email = "harryhuang2652@qq.com"}
-]
+authors = [{ name = "Harry Huang", email = "harryhuang2652@qq.com" }]
 license = "MIT"
 readme = "README.md"
 requires-python = ">=3.9,<3.13"
 dependencies = [
     "httpx[socks] (~=0.28)",
     "fastapi[standard] (~=0.116)",
-    "loguru (~=0.7)"
+    "loguru (~=0.7)",
 ]
 
 [tool.poetry]

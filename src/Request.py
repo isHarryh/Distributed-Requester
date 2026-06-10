@@ -1,7 +1,9 @@
 from enum import Enum
-from typing import Callable, Optional, Union
+from pathlib import Path
+from typing import Any, Callable, Optional, Union
 import asyncio
 import json
+import mimetypes
 import random
 import time
 
@@ -9,6 +11,7 @@ import httpx
 
 from src.Config import TaskConfig, RequestConfig
 from src.utils.CustomTransport import AsyncCustomHost, NameSolver
+from src.utils.FilePool import FilePool
 from src.utils.RateLimiter import RateLimiter
 from src.utils.ResponseStatus import ResponseStatus, HttpStatus
 
@@ -103,11 +106,13 @@ class RequestWorker:
         rate_limiter: Optional[RateLimiter] = None,
         response_callback: Optional[Callable[[RequestRecord], None]] = None,
         proxy_provider: Optional[Callable[[], Optional[str]]] = None,
+        file_pool: Optional[FilePool] = None,
     ):
         self.task_config = task_config
         self.rate_limiter = rate_limiter
         self.response_callback = response_callback
         self.proxy_provider = proxy_provider
+        self.file_pool = file_pool or FilePool.from_task(task_config)
 
         # HTTP client configuration
         self.limits = httpx.Limits(
@@ -186,34 +191,51 @@ class RequestWorker:
             # Fallback to first request if order is not supported
             return self.task_config.requests[0]
 
-    def _prepare_request_data(self, request_config: RequestConfig) -> Optional[str]:
-        """Prepare request data for the selected request"""
-        if request_config.method.upper() in ["POST", "PUT", "PATCH"]:
-            if request_config.data:
-                if isinstance(request_config.data, dict):
-                    return json.dumps(request_config.data)
-                return str(request_config.data)
-        return None
+    def _prepare_request_kwargs(self, request_config: RequestConfig) -> dict:
+        """Prepare request body keyword arguments for the selected request"""
+        if request_config.files:
+            data = request_config.data if isinstance(request_config.data, dict) else None
+            files = []
+            for file in request_config.files:
+                filename = file.filename or Path(file.path).name
+                content_type = file.content_type or mimetypes.guess_type(file.path)[0] or "application/octet-stream"
+                files.append((file.name, (filename, self.file_pool.get(file.path), content_type)))
+
+            kwargs: dict[str, Any] = {"files": files}
+            if data:
+                kwargs["data"] = data
+            return kwargs
+
+        if request_config.method.upper() in ["POST", "PUT", "PATCH"] and request_config.data:
+            if isinstance(request_config.data, dict):
+                return {"content": json.dumps(request_config.data)}
+            return {"content": str(request_config.data)}
+
+        return {}
 
     async def _execute_request(self) -> RequestRecord:
         """Execute a single request and return response record"""
         # Select request for this iteration
         request_config = self._select_request()
-        post_data = self._prepare_request_data(request_config)
+        request_kwargs = self._prepare_request_kwargs(request_config)
 
         # Merge default headers with request-specific headers
         merged_headers = {}
         merged_headers.update(self.task_config.prefabs.default_headers)
         merged_headers.update(request_config.headers)
+        if request_config.files:
+            merged_headers = {k: v for k, v in merged_headers.items() if k.lower() != "content-type"}
 
         # Ensure we have a valid client for current proxy
         await self._ensure_client()
         assert self._session is not None
 
-        if post_data is not None:
-            request = self._session.build_request("POST", request_config.url, content=post_data, headers=merged_headers)
-        else:
-            request = self._session.build_request("GET", request_config.url, headers=merged_headers)
+        request = self._session.build_request(
+            request_config.method,
+            request_config.url,
+            headers=merged_headers,
+            **request_kwargs,
+        )
 
         record = RequestRecord()
         record.put_request(request)

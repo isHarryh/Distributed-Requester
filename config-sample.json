@@ -16,6 +16,22 @@
           "url": "https://httpbin.org/post",
           "method": "POST",
           "data": "value1=data1&value2=data2"
+        },
+        {
+          "url": "https://httpbin.org/post",
+          "method": "POST",
+          "data": {
+            "description": "upload test"
+          },
+          "files": [
+            {
+              "name": "document",
+              "path": "./README.md",
+              "filename": "README.md",
+              "content_type": "text/markdown",
+              "cache": true
+            }
+          ]
         }
       ],
       "rules": [

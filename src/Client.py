@@ -16,6 +16,7 @@ from src.utils.StringFormatter import format_delta_time
 from src.utils.RateLimiter import RateLimiter
 from src.utils.ResponseStatus import ResponseStatus
 from src.utils.Logger import Logger
+from src.utils.FilePool import FilePool
 
 
 class ProxyPool:
@@ -484,6 +485,7 @@ class Client:
     def __init__(self, task_config: TaskConfig, server_config: Optional[Config] = None, partial_span: int = 60):
         self.task_config = task_config
         self.server_config = server_config
+        self.file_pool = FilePool.from_task(task_config)
         self.proxy_pool = ProxyPool(proxies=task_config.proxies, proxy_config=task_config.policy.proxy)
         self.stats = OverallStats(
             partial_span=partial_span, proxy_pool=self.proxy_pool, rule_callback=self._process_rule_response
@@ -624,6 +626,7 @@ class Client:
                 rate_limiter=rate_limiter,
                 response_callback=self.stats.add_result,
                 proxy_provider=self.proxy_pool.get_proxy,
+                file_pool=self.file_pool,
             )
             workers.append(worker)
 

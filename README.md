@@ -94,6 +94,23 @@ The `tasks` list contains some task objects whose schema is as follows:
       "url": "https://httpbin.org/post",
       "method": "POST",
       "data": "key1=data1&key2=data2" // can also be object
+    },
+    // multipart/form-data upload request
+    {
+      "url": "https://httpbin.org/post",
+      "method": "POST",
+      "data": { // optional, sent as form fields when files is not empty
+        "description": "upload test"
+      },
+      "files": [ // optional, enables multipart/form-data when not empty
+        {
+          "name": "document", // required, multipart field name
+          "path": "./assets/report.pdf", // required, local file path on the client
+          "filename": "report.pdf", // optional, defaults to basename of path
+          "content_type": "application/pdf", // optional, guessed from path if omitted
+          "cache": false // optional, default to false, if true, caches file bytes in memory before requests start
+        }
+      ]
     }
   ],
   "rules": [ // optional
@@ -150,6 +167,8 @@ The `tasks` list contains some task objects whose schema is as follows:
   ]
 }
 ```
+
+When `files` is not empty, the request is sent as `multipart/form-data`. The optional `data` object is sent as regular form fields. Do not manually set `Content-Type: multipart/form-data`; the client removes it for upload requests so httpx can generate a valid boundary. Upload file paths are resolved on the client machine. The client checks all declared upload files before workers start; if any file is missing, the task fails without sending requests. If `cache` is true, the file bytes are loaded into memory before requests start and reused by the file pool.
 
 ### `server`
 

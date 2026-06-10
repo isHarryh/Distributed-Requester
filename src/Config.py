@@ -124,6 +124,23 @@ class PrefabsConfig(BaseModel):
     default_headers: Dict[str, str] = Field(default_factory=dict)
 
 
+class FilePartConfig(BaseModel):
+    """Multipart upload file configuration"""
+
+    name: str
+    path: str
+    filename: Optional[str] = None
+    content_type: Optional[str] = None
+    cache: bool = False
+
+    @field_validator("name", "path")
+    @classmethod
+    def validate_required_string(cls, v):
+        if not v:
+            raise ConfigError("File upload name and path cannot be empty")
+        return v
+
+
 class RequestConfig(BaseModel):
     """Request configuration"""
 
@@ -131,6 +148,7 @@ class RequestConfig(BaseModel):
     method: str = "GET"
     data: Optional[Union[str, Dict[str, Any]]] = None
     headers: Dict[str, str] = Field(default_factory=dict)
+    files: List[FilePartConfig] = Field(default_factory=list)
 
     @field_validator("url")
     @classmethod
